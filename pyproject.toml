@@ -109,6 +109,7 @@ ignore = [
 [tool.ruff.lint.per-file-ignores]
 "tests/*.py" = ["D", "S"]
 "docs/*.py" = ["D", "A"]
+"src/torch_ctf/ctf_lpp.py" = ["RUF002", "RUF003"]
 
 # https://docs.astral.sh/ruff/formatter/
 [tool.ruff.format]
