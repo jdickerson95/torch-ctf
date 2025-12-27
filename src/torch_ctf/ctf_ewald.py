@@ -22,6 +22,7 @@ def calculate_ctfp_and_ctfq_2d(
     beam_tilt_mrad: torch.Tensor | None = None,
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
+    transform_matrix: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Calculate CTFP and CTFQ for a 2D image.
 
@@ -59,6 +60,10 @@ def calculate_ctfp_and_ctfq_2d(
     odd_zernike_coeffs : dict | None
         Odd Zernike coefficients.
         Example: {"Z31c": 0.1, "Z31s": 0.2, "Z33c": 0.3, "Z33s": 0.4}
+    transform_matrix : torch.Tensor | None
+        Optional 2x2 transformation matrix for anisotropic magnification.
+        This should be the real-space transformation matrix A. The frequency-space
+        transformation (A^-1)^T is automatically computed and applied.
 
     Returns
     -------
@@ -88,6 +93,7 @@ def calculate_ctfp_and_ctfq_2d(
         image_shape=image_shape,
         rfft=rfft,
         fftshift=fftshift,
+        transform_matrix=transform_matrix,
     )
 
     total_phase_shift = calculate_total_phase_shift(

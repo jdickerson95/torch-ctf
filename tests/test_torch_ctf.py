@@ -473,6 +473,55 @@ def test_2d_ctf_fftshift():
     assert torch.allclose(result[5, 5], torch.tensor(0.1), atol=1e-2)
 
 
+def test_2d_ctf_transform_matrix():
+    """Test 2D CTF with transform_matrix for anisotropic magnification."""
+    # Create a simple scaling matrix (1.02x scaling in x, 1.01x scaling in y)
+    # This represents anisotropic magnification
+    transform_matrix = torch.tensor([[1.02, 0.0], [0.0, 1.01]])
+
+    # Calculate CTF without transform matrix
+    result_no_transform = calculate_ctf_2d(
+        defocus=1.5,
+        astigmatism=0,
+        astigmatism_angle=0,
+        pixel_size=8,
+        voltage=300,
+        spherical_aberration=2.7,
+        amplitude_contrast=0.1,
+        phase_shift=0,
+        image_shape=(10, 10),
+        rfft=False,
+        fftshift=False,
+    )
+
+    # Calculate CTF with transform matrix
+    result_with_transform = calculate_ctf_2d(
+        defocus=1.5,
+        astigmatism=0,
+        astigmatism_angle=0,
+        pixel_size=8,
+        voltage=300,
+        spherical_aberration=2.7,
+        amplitude_contrast=0.1,
+        phase_shift=0,
+        image_shape=(10, 10),
+        rfft=False,
+        fftshift=False,
+        transform_matrix=transform_matrix,
+    )
+
+    # Both should have the same shape
+    assert result_no_transform.shape == (10, 10)
+    assert result_with_transform.shape == (10, 10)
+
+    # Both should be finite
+    assert torch.all(torch.isfinite(result_no_transform))
+    assert torch.all(torch.isfinite(result_with_transform))
+
+    # The transform matrix should change the output (they should be different)
+    assert not torch.allclose(result_no_transform, result_with_transform, atol=1e-6)
+
+
 def test_calculate_defocus_phase_aberration():
     """Test defocus phase aberration calculation."""
     defocus_um = torch.tensor(1.5)
