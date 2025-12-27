@@ -27,6 +27,8 @@ def calculate_ctfp_and_ctfq_2d(
     rfft: bool = True,
     fftshift: bool = False,
     discontinuity_angle: float = 0.0,
+    blur_at_discontinuity: bool = False,
+    blur_distance_degrees: float = 5.0,
     beam_tilt_mrad: torch.Tensor | None = None,
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
@@ -70,6 +72,14 @@ def calculate_ctfp_and_ctfq_2d(
         If 0, behavior is unchanged (all ctfp and all ctfq).
         Note: Since ctfp and ctfq are complex conjugates, this mixing
         is equivalent to rotating the coordinate system.
+    blur_at_discontinuity : bool
+        Whether to apply cosine-weighted blurring at the discontinuity
+        (default: False). If True, uses smooth transition instead of sharp.
+    blur_distance_degrees : float
+        Distance in degrees over which to blur the transition at the
+        discontinuity angle (default: 5.0). Uses cosine falloff weighting.
+        Only used if blur_at_discontinuity=True.
+        Must be <= discontinuity_angle and <= (180 - discontinuity_angle).
     beam_tilt_mrad : torch.Tensor | None
         Beam tilt in milliradians. [bx, by] in mrad
     even_zernike_coeffs : dict | None
@@ -169,6 +179,18 @@ def calculate_ctfp_and_ctfq_2d(
             device=device,
         )
 
+        # Use blurring if enabled
+        if blur_at_discontinuity and blur_distance_degrees > 0.0:
+            ctfp_mixed, ctfq_mixed = _mix_at_discontinuity(
+                ctfp=ctfp,
+                ctfq=ctfq,
+                angles=angles,
+                discontinuity_angle=discontinuity_angle,
+                blur_distance_degrees=blur_distance_degrees,
+            )
+            return ctfp_mixed, ctfq_mixed
+
+        # Sharp transition (no blurring)
         # Create mask for angles >= discontinuity_angle
         angle_mask = angles >= discontinuity_angle
 
@@ -331,6 +353,97 @@ def _get_fourier_angle(
     angle_degrees = torch.rad2deg(angle_radians)
 
     return angle_degrees
+
+
+def _mix_at_discontinuity(
+    ctfp: torch.Tensor,
+    ctfq: torch.Tensor,
+    angles: torch.Tensor,
+    discontinuity_angle: float,
+    blur_distance_degrees: float,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    """Mix ctfp and ctfq with cosine falloff at discontinuity angle.
+
+    Parameters
+    ----------
+    ctfp : torch.Tensor
+        The P component of the CTF (complex tensor).
+    ctfq : torch.Tensor
+        The Q component of the CTF (complex tensor).
+    angles : torch.Tensor
+        Angle in degrees (0-180) for each pixel in the rfft.
+    discontinuity_angle : float
+        Discontinuity angle in degrees.
+    blur_distance_degrees : float
+        Distance in degrees over which to blur the transition.
+
+    Returns
+    -------
+    ctfp_mixed : torch.Tensor
+        The mixed P component.
+    ctfq_mixed : torch.Tensor
+        The mixed Q component.
+    """
+    # Validate blur distance
+    if blur_distance_degrees > discontinuity_angle:
+        raise ValueError(
+            f"blur_distance_degrees ({blur_distance_degrees}) must be <= "
+            f"discontinuity_angle ({discontinuity_angle})"
+        )
+    if blur_distance_degrees > (180.0 - discontinuity_angle):
+        raise ValueError(
+            f"blur_distance_degrees ({blur_distance_degrees}) must be <= "
+            f"(180 - discontinuity_angle) = {180.0 - discontinuity_angle}"
+        )
+
+    # Calculate transition region boundaries
+    angle_low = discontinuity_angle - blur_distance_degrees
+    angle_high = discontinuity_angle + blur_distance_degrees
+
+    # Create masks for different regions
+    # Below transition: use ctfq for ctfp, ctfp for ctfq
+    below_mask = angles < angle_low
+
+    # In transition region: cosine-weighted mixing
+    transition_mask = (angles >= angle_low) & (angles <= angle_high)
+    # Above transition: use ctfp for ctfp, ctfq for ctfq (no change needed)
+
+    # Calculate cosine weight for transition region
+    # Normalize angle to [0, 1] within transition region
+    # angle_low -> 0, angle_high -> 1
+    angle_normalized = torch.zeros_like(angles)
+    angle_normalized[transition_mask] = (angles[transition_mask] - angle_low) / (
+        angle_high - angle_low
+    )
+    # Cosine falloff: 0 at angle_low (full ctfq), 1 at angle_high (full ctfp)
+    # Use (1 - cos(π * x)) / 2 for smooth transition from 0 to 1
+    cosine_weight = (1.0 - torch.cos(torch.pi * angle_normalized)) / 2.0
+
+    # Initialize mixed tensors
+    ctfp_mixed = ctfp.clone()
+    ctfq_mixed = ctfq.clone()
+
+    # Apply mixing
+    # Below transition: ctfp gets ctfq, ctfq gets ctfp
+    ctfp_mixed[below_mask] = ctfq[below_mask]
+    ctfq_mixed[below_mask] = ctfp[below_mask]
+
+    # Above transition: ctfp gets ctfp, ctfq gets ctfq (no change)
+    # No action needed as they're already correct
+
+    # In transition: weighted mixing
+    # ctfp: cosine_weight * ctfp + (1 - cosine_weight) * ctfq
+    # ctfq: cosine_weight * ctfq + (1 - cosine_weight) * ctfp
+    ctfp_mixed[transition_mask] = (
+        cosine_weight[transition_mask] * ctfp[transition_mask]
+        + (1.0 - cosine_weight[transition_mask]) * ctfq[transition_mask]
+    )
+    ctfq_mixed[transition_mask] = (
+        cosine_weight[transition_mask] * ctfq[transition_mask]
+        + (1.0 - cosine_weight[transition_mask]) * ctfp[transition_mask]
+    )
+
+    return ctfp_mixed, ctfq_mixed
 
 
 def get_ctf_weighting(
