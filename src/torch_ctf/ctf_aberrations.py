@@ -2,7 +2,6 @@
 
 import warnings
 
-import einops
 import torch
 from scipy import constants as C
 
@@ -218,12 +217,6 @@ def apply_odd_zernikes(
     phase = torch.zeros_like(rho)
 
     for name, coeff in odd_zernikes.items():
-        # Reshape coeff to broadcast with rho and theta
-        # rho and theta have shape (..., h, w), so we need to add trailing dims
-        # to coeff to match the spatial dimensions
-        # Add trailing dimensions until coeff has the same number of dims as rho
-        coeff = coeff.view(*coeff.shape, *([1] * (rho.ndim - coeff.ndim)))
-
         if name == "Z31c":  # beam tilt / axial coma x
             phase += coeff * rho**3 * torch.cos(theta)
         elif name == "Z31s":  # beam tilt / axial coma y
@@ -264,7 +257,6 @@ def apply_even_zernikes(
     """
     chi = total_phase_shift.clone()
     for name, coeff in even_zernikes.items():
-        coeff = einops.rearrange(coeff, "... -> ... 1 1")
         if name == "Z44c":  # 4-fold astigmatism
             chi += coeff * rho**4 * torch.cos(4 * theta)
         elif name == "Z44s":
