@@ -4,7 +4,7 @@ import einops
 import numpy as np
 import torch
 from scipy import constants as C
-from torch_grid_utils.fftfreq_grid import fftfreq_grid
+from torch_grid_utils.fftfreq_grid import fftfreq_grid, transform_fftfreq_grid
 
 from torch_ctf.ctf_2d import _setup_ctf_2d
 from torch_ctf.ctf_aberrations import (
@@ -568,8 +568,13 @@ def calc_LPP_ctf_2D(
         fftshift=fftshift,
         norm=False,
         device=device,
-        transform_matrix=transform_matrix,
     )
+    if transform_matrix is not None:
+        fft_freq_grid = transform_fftfreq_grid(
+            frequency_grid=fft_freq_grid,
+            real_space_matrix=transform_matrix,
+            device=device,
+        )
     fft_freq_grid = fft_freq_grid / einops.rearrange(
         pixel_size_tensor, "... -> ... 1 1 1"
     )

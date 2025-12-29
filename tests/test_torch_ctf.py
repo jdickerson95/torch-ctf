@@ -1053,9 +1053,9 @@ def test_apply_odd_zernikes_invalid():
 def test_apply_even_zernikes():
     """Test applying even Zernike coefficients."""
     even_zernikes = {
-        "Z44c": torch.tensor(0.1),
-        "Z44s": torch.tensor(0.2),
-        "Z60": torch.tensor(0.3),
+        "Z44c": 0.1,  # plain float
+        "Z44s": 0.2,  # plain float
+        "Z60": 0.3,  # plain float
     }
     total_phase_shift = torch.ones((10, 10)) * 0.5
     rho = torch.ones((10, 10)) * 0.5
@@ -1076,7 +1076,7 @@ def test_apply_even_zernikes():
 
 def test_apply_even_zernikes_invalid():
     """Test applying invalid even Zernike coefficient raises error."""
-    even_zernikes = {"Z99": torch.tensor(0.1)}
+    even_zernikes = {"Z99": 0.1}  # plain float
     total_phase_shift = torch.ones((10, 10)) * 0.5
     rho = torch.ones((10, 10)) * 0.5
     theta = torch.linspace(0, 2 * torch.pi, 100).reshape(10, 10)

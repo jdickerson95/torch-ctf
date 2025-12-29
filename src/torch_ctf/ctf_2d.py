@@ -2,7 +2,7 @@
 
 import einops
 import torch
-from torch_grid_utils.fftfreq_grid import fftfreq_grid
+from torch_grid_utils.fftfreq_grid import fftfreq_grid, transform_fftfreq_grid
 
 from torch_ctf.ctf_aberrations import apply_even_zernikes, apply_odd_zernikes
 from torch_ctf.ctf_utils import calculate_total_phase_shift, fftfreq_grid_polar
@@ -236,8 +236,13 @@ def _setup_ctf_2d(
         fftshift=fftshift,
         norm=False,
         device=device,
-        transform_matrix=transform_matrix,
     )
+    if transform_matrix is not None:
+        fft_freq_grid = transform_fftfreq_grid(
+            frequency_grid=fft_freq_grid,
+            real_space_matrix=transform_matrix,
+            device=device,
+        )
     fft_freq_grid = fft_freq_grid / einops.rearrange(pixel_size, "... -> ... 1 1 1")
     fft_freq_grid_squared = einops.reduce(
         fft_freq_grid**2, "... f->...", reduction="sum"
