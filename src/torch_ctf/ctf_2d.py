@@ -3,9 +3,10 @@
 import einops
 import torch
 from torch_grid_utils.fftfreq_grid import fftfreq_grid, transform_fftfreq_grid
+from torch_grid_utils.polar_grid import fftfreq_grid_polar
 
 from torch_ctf.ctf_aberrations import apply_even_zernikes, apply_odd_zernikes
-from torch_ctf.ctf_utils import calculate_total_phase_shift, fftfreq_grid_polar
+from torch_ctf.ctf_utils import calculate_total_phase_shift
 
 
 def calculate_ctf_2d(

@@ -84,34 +84,3 @@ def calculate_total_phase_shift(
     )
 
     return phase_aberration - additional_phase_shift - amplitude_contrast_phase_shift
-
-
-def fftfreq_grid_polar(
-    fft_freq_grid: torch.Tensor,  # (..., h, w, 2)
-    eps: float = 1e-12,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Convert Cartesian frequency grid to polar coordinates.
-
-    Parameters
-    ----------
-    fft_freq_grid : torch.Tensor
-        Cartesian frequency grid in Angstroms^-1.
-    eps : float
-        Small constant to avoid division by zero.
-
-    Returns
-    -------
-    rho_norm : torch.Tensor
-        Normalized radial frequency (0..1)
-    theta : torch.Tensor
-        Polar angle in radians (-π..π)
-    """
-    kx = fft_freq_grid[..., 0]
-    ky = fft_freq_grid[..., 1]
-
-    rho = torch.sqrt(kx**2 + ky**2 + eps)
-    theta = torch.atan2(ky, kx)
-
-    rho_norm = rho / rho.max()
-    return rho_norm, theta
