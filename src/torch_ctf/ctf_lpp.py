@@ -4,7 +4,7 @@ import einops
 import numpy as np
 import torch
 from scipy import constants as C
-from torch_grid_utils.fftfreq_grid import fftfreq_grid
+from torch_grid_utils.fftfreq_grid import fftfreq_grid, transform_fftfreq_grid
 
 from torch_ctf.ctf_2d import _setup_ctf_2d
 from torch_ctf.ctf_aberrations import (
@@ -457,6 +457,7 @@ def calc_LPP_ctf_2D(
     beam_tilt_mrad: torch.Tensor | None = None,
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
+    transform_matrix: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Calculate the Laser Phase Plate (LPP) modified CTF for a 2D image.
 
@@ -515,6 +516,10 @@ def calc_LPP_ctf_2D(
     odd_zernike_coeffs : dict | None
         Odd Zernike coefficients.
         Example: {"Z31c": 0.1, "Z31s": 0.2, "Z33c": 0.3, "Z33s": 0.4}
+    transform_matrix : torch.Tensor | None
+        Optional 2x2 transformation matrix for anisotropic magnification.
+        This should be the real-space transformation matrix A. The frequency-space
+        transformation (A^-1)^T is automatically computed and applied.
 
     Returns
     -------
@@ -543,6 +548,7 @@ def calc_LPP_ctf_2D(
         image_shape=image_shape,
         rfft=rfft,
         fftshift=fftshift,
+        transform_matrix=transform_matrix,
     )
 
     # Get the frequency grid for laser calculations
@@ -563,6 +569,12 @@ def calc_LPP_ctf_2D(
         norm=False,
         device=device,
     )
+    if transform_matrix is not None:
+        fft_freq_grid = transform_fftfreq_grid(
+            frequency_grid=fft_freq_grid,
+            real_space_matrix=transform_matrix,
+            device=device,
+        )
     fft_freq_grid = fft_freq_grid / einops.rearrange(
         pixel_size_tensor, "... -> ... 1 1 1"
     )

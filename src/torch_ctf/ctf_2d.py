@@ -2,7 +2,7 @@
 
 import einops
 import torch
-from torch_grid_utils.fftfreq_grid import fftfreq_grid
+from torch_grid_utils.fftfreq_grid import fftfreq_grid, transform_fftfreq_grid
 
 from torch_ctf.ctf_aberrations import apply_even_zernikes, apply_odd_zernikes
 from torch_ctf.ctf_utils import calculate_total_phase_shift, fftfreq_grid_polar
@@ -23,6 +23,7 @@ def calculate_ctf_2d(
     beam_tilt_mrad: torch.Tensor | None = None,
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
+    transform_matrix: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Calculate the Contrast Transfer Function (CTF) for a 2D image.
 
@@ -62,6 +63,10 @@ def calculate_ctf_2d(
     odd_zernike_coeffs : dict | None
         Odd Zernike coefficients.
         Example: {"Z31c": 0.1, "Z31s": 0.2, "Z33c": 0.3, "Z33s": 0.4}
+    transform_matrix : torch.Tensor | None
+        Optional 2x2 transformation matrix for anisotropic magnification.
+        This should be the real-space transformation matrix A. The frequency-space
+        transformation (A^-1)^T is automatically computed and applied.
 
     Returns
     -------
@@ -89,6 +94,7 @@ def calculate_ctf_2d(
         image_shape=image_shape,
         rfft=rfft,
         fftshift=fftshift,
+        transform_matrix=transform_matrix,
     )
 
     total_phase_shift = calculate_total_phase_shift(
@@ -136,6 +142,7 @@ def _setup_ctf_2d(
     image_shape: tuple[int, int],
     rfft: bool,
     fftshift: bool,
+    transform_matrix: torch.Tensor | None = None,
 ) -> tuple[
     torch.Tensor,
     torch.Tensor,
@@ -174,6 +181,10 @@ def _setup_ctf_2d(
         Generate the CTF containing only the non-redundant half transform from a rfft.
     fftshift : bool
         Whether to apply fftshift on the resulting CTF images.
+    transform_matrix : torch.Tensor | None
+        Optional 2x2 transformation matrix for anisotropic magnification.
+        This should be the real-space transformation matrix A. The frequency-space
+        transformation (A^-1)^T is automatically computed and applied.
 
     Returns
     -------
@@ -226,6 +237,12 @@ def _setup_ctf_2d(
         norm=False,
         device=device,
     )
+    if transform_matrix is not None:
+        fft_freq_grid = transform_fftfreq_grid(
+            frequency_grid=fft_freq_grid,
+            real_space_matrix=transform_matrix,
+            device=device,
+        )
     fft_freq_grid = fft_freq_grid / einops.rearrange(pixel_size, "... -> ... 1 1 1")
     fft_freq_grid_squared = einops.reduce(
         fft_freq_grid**2, "... f->...", reduction="sum"
