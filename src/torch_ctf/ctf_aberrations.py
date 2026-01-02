@@ -188,7 +188,8 @@ def apply_odd_zernikes(
     Parameters
     ----------
     odd_zernikes: dict | None
-        Odd Zernike coefficients.
+        Odd Zernike coefficients. Values can be floats or tensors.
+        Floats will be converted to tensors for differentiability.
     rho: torch.Tensor
         Radial coordinate.
     theta: torch.Tensor
@@ -215,8 +216,21 @@ def apply_odd_zernikes(
         return torch.zeros_like(rho)
 
     phase = torch.zeros_like(rho)
+    device = rho.device
+    dtype = rho.dtype
 
     for name, coeff in odd_zernikes.items():
+        # Convert float to tensor for differentiability
+        if isinstance(coeff, int | float):
+            coeff = torch.tensor(coeff, dtype=dtype, device=device, requires_grad=True)
+        elif isinstance(coeff, torch.Tensor):
+            # Ensure tensor is on correct device and dtype
+            coeff = coeff.to(device=device, dtype=dtype)
+        else:
+            raise TypeError(
+                f"Zernike coefficient must be float or torch.Tensor, got {type(coeff)}"
+            )
+
         if name == "Z31c":  # beam tilt / axial coma x
             phase += coeff * rho**3 * torch.cos(theta)
         elif name == "Z31s":  # beam tilt / axial coma y
@@ -242,7 +256,8 @@ def apply_even_zernikes(
     Parameters
     ----------
     even_zernikes: dict
-        Even Zernike coefficients.
+        Even Zernike coefficients. Values can be floats or tensors.
+        Floats will be converted to tensors for differentiability.
     total_phase_shift: torch.Tensor
         Total phase shift.
     rho: torch.Tensor
@@ -256,7 +271,21 @@ def apply_even_zernikes(
         Phase shift with even Zernike coefficients applied.
     """
     chi = total_phase_shift.clone()
+    device = rho.device
+    dtype = rho.dtype
+
     for name, coeff in even_zernikes.items():
+        # Convert float to tensor for differentiability
+        if isinstance(coeff, int | float):
+            coeff = torch.tensor(coeff, dtype=dtype, device=device, requires_grad=True)
+        elif isinstance(coeff, torch.Tensor):
+            # Ensure tensor is on correct device and dtype
+            coeff = coeff.to(device=device, dtype=dtype)
+        else:
+            raise TypeError(
+                f"Zernike coefficient must be float or torch.Tensor, got {type(coeff)}"
+            )
+
         if name == "Z44c":  # 4-fold astigmatism
             chi += coeff * rho**4 * torch.cos(4 * theta)
         elif name == "Z44s":
