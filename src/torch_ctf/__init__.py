@@ -11,6 +11,7 @@ from torch_ctf.ctf_aberrations import (
     calculate_defocus_phase_aberration,
     calculate_relativistic_electron_wavelength,
     resolve_odd_zernikes,
+    zernike_coeffs_to_beam_tilt,
 )
 from torch_ctf.ctf_ewald import calculate_ctfp_and_ctfq_2d, get_ctf_weighting
 from torch_ctf.ctf_lpp import (
@@ -58,4 +59,5 @@ __all__ = [
     "initialize_laser_params",
     "make_laser_coords",
     "resolve_odd_zernikes",
+    "zernike_coeffs_to_beam_tilt",
 ]

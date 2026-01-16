@@ -118,6 +118,55 @@ def beam_tilt_to_zernike_coeffs(
     }
 
 
+def zernike_coeffs_to_beam_tilt(
+    zernike_coeffs: dict,
+    voltage_kv: torch.Tensor,
+    spherical_aberration_mm: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Convert Zernike axial coma coefficients Z31c, Z31s to beam tilt.
+
+    This is the inverse of `beam_tilt_to_zernike_coeffs`.
+
+    Parameters
+    ----------
+    zernike_coeffs : dict
+        Zernike axial coma coefficients Z31c, Z31s in radians.
+        Must contain keys "Z31c" and "Z31s".
+    voltage_kv : torch.Tensor
+        Acceleration voltage in kilovolts (kV).
+    spherical_aberration_mm : torch.Tensor
+        Spherical aberration in millimeters (mm).
+
+    Returns
+    -------
+    beam_tilt_mrad : torch.Tensor
+        Beam tilt in milliradians with shape (..., 2) [bx, by].
+    """
+    if "Z31c" not in zernike_coeffs or "Z31s" not in zernike_coeffs:
+        raise ValueError("zernike_coeffs must contain both 'Z31c' and 'Z31s' keys")
+
+    voltage = voltage_kv * 1e3
+    Cs = spherical_aberration_mm * 1e7  # mm → Å
+    lam = calculate_relativistic_electron_wavelength(voltage) * 1e10  # Å
+
+    prefactor = 2 * C.pi * Cs * lam**2
+
+    # Convert Zernike coefficients to beam tilt in radians
+    beam_tilt_rad = torch.stack(
+        [
+            zernike_coeffs["Z31c"] / prefactor,
+            zernike_coeffs["Z31s"] / prefactor,
+        ],
+        dim=-1,
+    )
+
+    # Convert rad → mrad
+    beam_tilt_mrad = beam_tilt_rad * 1e3
+
+    return beam_tilt_mrad
+
+
 def resolve_odd_zernikes(
     beam_tilt_mrad: torch.Tensor | None,
     odd_zernike_coeffs: dict | None,

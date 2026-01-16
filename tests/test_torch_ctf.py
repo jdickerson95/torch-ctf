@@ -25,6 +25,7 @@ from torch_ctf import (
     initialize_laser_params,
     make_laser_coords,
     resolve_odd_zernikes,
+    zernike_coeffs_to_beam_tilt,
 )
 
 EXPECTED_2D = torch.tensor(
@@ -1322,6 +1323,88 @@ def test_beam_tilt_to_zernike_coeffs_broadcasting():
     assert result["Z31s"].shape == (2,)
     assert torch.all(torch.isfinite(result["Z31c"]))
     assert torch.all(torch.isfinite(result["Z31s"]))
+
+
+def test_zernike_coeffs_to_beam_tilt():
+    """Test Zernike coefficients to beam tilt conversion."""
+    zernike_coeffs = {
+        "Z31c": torch.tensor(6.575432),
+        "Z31s": torch.tensor(13.150864),
+    }
+    voltage_kv = torch.tensor(300.0)
+    spherical_aberration_mm = torch.tensor(2.7)
+
+    result = zernike_coeffs_to_beam_tilt(
+        zernike_coeffs=zernike_coeffs,
+        voltage_kv=voltage_kv,
+        spherical_aberration_mm=spherical_aberration_mm,
+    )
+
+    assert isinstance(result, torch.Tensor)
+    assert result.shape == (2,)
+    assert torch.all(torch.isfinite(result))
+    # Should be approximately 0.1 mrad and 0.2 mrad (within numerical precision)
+    assert torch.allclose(result[0], torch.tensor(0.1), atol=1e-4)
+    assert torch.allclose(result[1], torch.tensor(0.2), atol=1e-4)
+
+
+def test_zernike_coeffs_to_beam_tilt_broadcasting():
+    """Test zernike_coeffs_to_beam_tilt with different tensor shapes."""
+    zernike_coeffs = {
+        "Z31c": torch.tensor([6.575432, 3.287716]),
+        "Z31s": torch.tensor([13.150864, 9.863148]),
+    }
+    voltage_kv = torch.tensor(300.0)
+    spherical_aberration_mm = torch.tensor(2.7)
+
+    result = zernike_coeffs_to_beam_tilt(
+        zernike_coeffs=zernike_coeffs,
+        voltage_kv=voltage_kv,
+        spherical_aberration_mm=spherical_aberration_mm,
+    )
+
+    assert isinstance(result, torch.Tensor)
+    assert result.shape == (2, 2)
+    assert torch.all(torch.isfinite(result))
+
+
+def test_zernike_coeffs_to_beam_tilt_missing_keys():
+    """Test zernike_coeffs_to_beam_tilt with missing keys raises error."""
+    zernike_coeffs = {"Z31c": torch.tensor(6.575432)}
+    voltage_kv = torch.tensor(300.0)
+    spherical_aberration_mm = torch.tensor(2.7)
+
+    with pytest.raises(ValueError, match="must contain both 'Z31c' and 'Z31s'"):
+        zernike_coeffs_to_beam_tilt(
+            zernike_coeffs=zernike_coeffs,
+            voltage_kv=voltage_kv,
+            spherical_aberration_mm=spherical_aberration_mm,
+        )
+
+
+def test_beam_tilt_zernike_round_trip():
+    """Test round-trip conversion: beam_tilt -> zernike -> beam_tilt."""
+    # Test with various beam tilt values
+    beam_tilt_mrad = torch.tensor([[0.1, 0.2], [0.5, 1.0], [1.0, 2.0]])
+    voltage_kv = torch.tensor(300.0)
+    spherical_aberration_mm = torch.tensor(2.7)
+
+    # Convert to Zernike coefficients
+    zernike_coeffs = beam_tilt_to_zernike_coeffs(
+        beam_tilt_mrad=beam_tilt_mrad,
+        voltage_kv=voltage_kv,
+        spherical_aberration_mm=spherical_aberration_mm,
+    )
+
+    # Convert back to beam tilt
+    beam_tilt_recovered = zernike_coeffs_to_beam_tilt(
+        zernike_coeffs=zernike_coeffs,
+        voltage_kv=voltage_kv,
+        spherical_aberration_mm=spherical_aberration_mm,
+    )
+
+    # Should recover original values (within numerical precision)
+    assert torch.allclose(beam_tilt_mrad, beam_tilt_recovered, atol=1e-5)
 
 
 def test_2d_ctf_with_zernikes():
