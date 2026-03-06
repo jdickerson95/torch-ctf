@@ -454,6 +454,7 @@ def calc_LPP_ctf_2D(
     laser_trans_offset_angstrom: float,
     laser_polarization_angle_deg: float,
     peak_phase_deg: float,
+    dual_laser: bool = False,
     beam_tilt_mrad: torch.Tensor | None = None,
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
@@ -508,6 +509,10 @@ def calc_LPP_ctf_2D(
         Polarization angle of the laser in degrees.
     peak_phase_deg : float
         Desired peak phase in degrees.
+    dual_laser : bool, optional
+        If True, add a second laser with the same parameters but rotated 90° in the
+        xy plane (perpendicular to the first). The two phase contributions are summed.
+        Default is False.
     beam_tilt_mrad : torch.Tensor | None
         Beam tilt in milliradians. [bx, by] in mrad
     even_zernike_coeffs : dict | None
@@ -580,19 +585,48 @@ def calc_LPP_ctf_2D(
     )
 
     # Calculate laser phase using the dedicated function
-    laser_phase_radians = calc_LPP_phase(
-        fft_freq_grid=fft_freq_grid,
-        NA=NA,
-        laser_wavelength_angstrom=laser_wavelength_angstrom,
-        focal_length_angstrom=focal_length_angstrom,
-        laser_xy_angle_deg=laser_xy_angle_deg,
-        laser_xz_angle_deg=laser_xz_angle_deg,
-        laser_long_offset_angstrom=laser_long_offset_angstrom,
-        laser_trans_offset_angstrom=laser_trans_offset_angstrom,
-        laser_polarization_angle_deg=laser_polarization_angle_deg,
-        peak_phase_deg=peak_phase_deg,
-        voltage=voltage,
-    )
+    if dual_laser:
+        phase1 = calc_LPP_phase(
+            fft_freq_grid=fft_freq_grid,
+            NA=NA,
+            laser_wavelength_angstrom=laser_wavelength_angstrom,
+            focal_length_angstrom=focal_length_angstrom,
+            laser_xy_angle_deg=laser_xy_angle_deg,
+            laser_xz_angle_deg=laser_xz_angle_deg,
+            laser_long_offset_angstrom=laser_long_offset_angstrom,
+            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
+            laser_polarization_angle_deg=laser_polarization_angle_deg,
+            peak_phase_deg=peak_phase_deg,
+            voltage=voltage,
+        )
+        phase2 = calc_LPP_phase(
+            fft_freq_grid=fft_freq_grid,
+            NA=NA,
+            laser_wavelength_angstrom=laser_wavelength_angstrom,
+            focal_length_angstrom=focal_length_angstrom,
+            laser_xy_angle_deg=laser_xy_angle_deg + 90,
+            laser_xz_angle_deg=laser_xz_angle_deg,
+            laser_long_offset_angstrom=laser_long_offset_angstrom,
+            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
+            laser_polarization_angle_deg=laser_polarization_angle_deg,
+            peak_phase_deg=peak_phase_deg,
+            voltage=voltage,
+        )
+        laser_phase_radians = phase1 + phase2
+    else:
+        laser_phase_radians = calc_LPP_phase(
+            fft_freq_grid=fft_freq_grid,
+            NA=NA,
+            laser_wavelength_angstrom=laser_wavelength_angstrom,
+            focal_length_angstrom=focal_length_angstrom,
+            laser_xy_angle_deg=laser_xy_angle_deg,
+            laser_xz_angle_deg=laser_xz_angle_deg,
+            laser_long_offset_angstrom=laser_long_offset_angstrom,
+            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
+            laser_polarization_angle_deg=laser_polarization_angle_deg,
+            peak_phase_deg=peak_phase_deg,
+            voltage=voltage,
+        )
 
     # Convert laser phase from radians to degrees for compatibility
     laser_phase_degrees = torch.rad2deg(laser_phase_radians)

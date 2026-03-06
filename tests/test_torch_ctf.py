@@ -1587,6 +1587,42 @@ def test_calc_LPP_ctf_2D():
     assert not torch.is_complex(result)
 
 
+def test_calc_LPP_ctf_2D_dual_laser():
+    """Test LPP CTF with dual perpendicular laser option."""
+    common = {
+        "defocus": 1.5,
+        "astigmatism": 0,
+        "astigmatism_angle": 0,
+        "voltage": 300,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "pixel_size": 8,
+        "image_shape": (10, 10),
+        "rfft": False,
+        "fftshift": False,
+        "NA": 0.1,
+        "laser_wavelength_angstrom": 5000.0,
+        "focal_length_angstrom": 1e6,
+        "laser_xy_angle_deg": 0.0,
+        "laser_xz_angle_deg": 0.0,
+        "laser_long_offset_angstrom": 0.0,
+        "laser_trans_offset_angstrom": 0.0,
+        "laser_polarization_angle_deg": 0.0,
+        "peak_phase_deg": 90.0,
+    }
+    result_single = calc_LPP_ctf_2D(**common, dual_laser=False)
+    result_dual = calc_LPP_ctf_2D(**common, dual_laser=True)
+    assert result_single.shape == (10, 10)
+    assert result_dual.shape == (10, 10)
+    assert torch.all(torch.isfinite(result_single))
+    assert torch.all(torch.isfinite(result_dual))
+    assert not torch.is_complex(result_single)
+    assert not torch.is_complex(result_dual)
+    assert not torch.allclose(result_single, result_dual), (
+        "dual_laser=True should differ from dual_laser=False"
+    )
+
+
 def test_calc_LPP_ctf_2D_with_zernikes():
     """Test LPP CTF with Zernike coefficients."""
     with pytest.warns(RuntimeWarning, match="Both beam tilt and Zernike"):
