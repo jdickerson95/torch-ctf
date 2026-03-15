@@ -23,6 +23,12 @@ from torch_ctf.ctf_lpp import (
     initialize_laser_params,
     make_laser_coords,
 )
+from torch_ctf.ctf_thickness import (
+    calculate_ctf_thickness_1d,
+    calculate_ctf_thickness_2d,
+    calculate_ctf_thickness_lpp,
+    calculate_ctf_with_thickness,
+)
 from torch_ctf.ctf_utils import (
     calculate_additional_phase_shift,
     calculate_amplitude_contrast_equivalent_phase_shift,
@@ -46,6 +52,10 @@ __all__ = [
     "calculate_amplitude_contrast_equivalent_phase_shift",
     "calculate_ctf_1d",
     "calculate_ctf_2d",
+    "calculate_ctf_thickness_1d",
+    "calculate_ctf_thickness_2d",
+    "calculate_ctf_thickness_lpp",
+    "calculate_ctf_with_thickness",
     "calculate_ctfp_and_ctfq_2d",
     "calculate_defocus_phase_aberration",
     "calculate_relativistic_beta",

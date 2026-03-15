@@ -26,6 +26,12 @@ from torch_ctf import (
     make_laser_coords,
     resolve_odd_zernikes,
 )
+from torch_ctf.ctf_thickness import (
+    calculate_ctf_thickness_1d,
+    calculate_ctf_thickness_2d,
+    calculate_ctf_thickness_lpp,
+    calculate_ctf_with_thickness,
+)
 
 EXPECTED_2D = torch.tensor(
     [
@@ -1781,3 +1787,203 @@ def test_calc_LPP_ctf_2D_with_transform_matrix():
 
     # The transform matrix should change the output (they should be different)
     assert not torch.allclose(result_no_transform, result_with_transform, atol=1e-6)
+
+
+def test_ctf_thickness_1d_amplitude_small_t_matches_sin_chi():
+    """Amplitude formulation with t->0: sinc(pi*lambda*g^2*t/2)->1 => sin(chi)."""
+    t_small = 1e-25
+    kwargs = {
+        "defocus": 1.5,
+        "voltage": 300.0,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "phase_shift": 0.0,
+        "pixel_size": 8.0,
+        "n_samples": 32,
+        "oversampling_factor": 1,
+    }
+    ctf = calculate_ctf_thickness_1d(False, t_small, **kwargs)
+    ctf_ref = calculate_ctf_thickness_1d(False, t_small, **kwargs)
+    assert torch.allclose(ctf, ctf_ref)
+    g2 = (torch.linspace(0, 0.5, 32, dtype=torch.float32) / 8.0) ** 2
+    chi = calculate_total_phase_shift(
+        defocus_um=torch.tensor(1.5),
+        voltage_kv=torch.tensor(300.0),
+        spherical_aberration_mm=torch.tensor(2.7),
+        phase_shift_degrees=torch.tensor(0.0),
+        amplitude_contrast_fraction=torch.tensor(0.1),
+        fftfreq_grid_angstrom_squared=g2,
+    )
+    expected = torch.sin(chi)
+    assert torch.allclose(ctf, expected, atol=1e-5)
+
+
+def test_ctf_thickness_1d_power_spectrum_small_t_matches_sin_squared_chi():
+    """Power spectrum with t->0: half*(1-cos(2*chi)) = sin^2(chi)."""
+    t_small = 1e-25
+    kwargs = {
+        "defocus": 1.5,
+        "voltage": 300.0,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "phase_shift": 0.0,
+        "pixel_size": 8.0,
+        "n_samples": 32,
+        "oversampling_factor": 1,
+    }
+    ctf = calculate_ctf_thickness_1d(True, t_small, **kwargs)
+    g2 = (torch.linspace(0, 0.5, 32, dtype=torch.float32) / 8.0) ** 2
+    chi = calculate_total_phase_shift(
+        defocus_um=torch.tensor(1.5),
+        voltage_kv=torch.tensor(300.0),
+        spherical_aberration_mm=torch.tensor(2.7),
+        phase_shift_degrees=torch.tensor(0.0),
+        amplitude_contrast_fraction=torch.tensor(0.1),
+        fftfreq_grid_angstrom_squared=g2,
+    )
+    expected = 0.5 * (1.0 - torch.cos(2.0 * chi))
+    assert torch.allclose(ctf, expected, atol=1e-5)
+
+
+def test_ctf_thickness_router_matches_explicit_1d():
+    kwargs = {
+        "defocus": 1.5,
+        "voltage": 300.0,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "phase_shift": 0.0,
+        "pixel_size": 8.0,
+        "n_samples": 16,
+        "oversampling_factor": 1,
+    }
+    a = calculate_ctf_thickness_1d(False, 100.0, **kwargs)
+    b = calculate_ctf_with_thickness("1d", False, 100.0, **kwargs)
+    assert torch.allclose(a, b)
+
+
+def test_ctf_thickness_2d_amplitude_small_t_matches_sin_chi():
+    from torch_ctf.ctf_2d import _setup_ctf_2d
+
+    t_small = 1e-25
+    (
+        defocus,
+        voltage,
+        sph,
+        amp,
+        phase,
+        g2,
+        _rho,
+        _theta,
+    ) = _setup_ctf_2d(
+        defocus=1.5,
+        astigmatism=0.0,
+        astigmatism_angle=0.0,
+        voltage=300.0,
+        spherical_aberration=2.7,
+        amplitude_contrast=0.1,
+        phase_shift=0.0,
+        pixel_size=8.0,
+        image_shape=(8, 8),
+        rfft=False,
+        fftshift=False,
+    )
+    chi = calculate_total_phase_shift(
+        defocus_um=defocus,
+        voltage_kv=voltage,
+        spherical_aberration_mm=sph,
+        phase_shift_degrees=phase,
+        amplitude_contrast_fraction=amp,
+        fftfreq_grid_angstrom_squared=g2,
+    )
+    ctf = calculate_ctf_thickness_2d(
+        False,
+        t_small,
+        defocus=1.5,
+        astigmatism=0.0,
+        astigmatism_angle=0.0,
+        voltage=300.0,
+        spherical_aberration=2.7,
+        amplitude_contrast=0.1,
+        phase_shift=0.0,
+        pixel_size=8.0,
+        image_shape=(8, 8),
+        rfft=False,
+        fftshift=False,
+    )
+    assert torch.allclose(ctf, torch.sin(chi), atol=1e-4)
+
+
+def test_ctf_thickness_lpp_shape_and_formulations_differ():
+    common = {
+        "defocus": 1.5,
+        "astigmatism": 0,
+        "astigmatism_angle": 0,
+        "voltage": 300,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "pixel_size": 8,
+        "image_shape": (10, 10),
+        "rfft": False,
+        "fftshift": False,
+        "NA": 0.1,
+        "laser_wavelength_angstrom": 5000.0,
+        "focal_length_angstrom": 1e6,
+        "laser_xy_angle_deg": 0.0,
+        "laser_xz_angle_deg": 0.0,
+        "laser_long_offset_angstrom": 0.0,
+        "laser_trans_offset_angstrom": 0.0,
+        "laser_polarization_angle_deg": 0.0,
+        "peak_phase_deg": 90.0,
+    }
+    t_angstrom = 200.0
+    amp = calculate_ctf_thickness_lpp(False, t_angstrom, **common)
+    ps = calculate_ctf_thickness_lpp(True, t_angstrom, **common)
+    assert amp.shape == (10, 10)
+    assert ps.shape == (10, 10)
+    assert torch.all(torch.isfinite(amp))
+    assert torch.all(torch.isfinite(ps))
+    assert not torch.allclose(amp, ps, atol=1e-3)
+
+
+def test_ctf_thickness_2d_power_spectrum_ignores_beam_tilt():
+    """Power-spectrum CTF is real and unchanged by beam tilt / odd Zernikes."""
+    common = {
+        "return_power_spectrum": True,
+        "sample_thickness_angstrom": 150.0,
+        "defocus": 1.5,
+        "astigmatism": 0.0,
+        "astigmatism_angle": 0.0,
+        "voltage": 300.0,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "phase_shift": 0.0,
+        "pixel_size": 8.0,
+        "image_shape": (12, 12),
+        "rfft": False,
+        "fftshift": False,
+    }
+    base = calculate_ctf_thickness_2d(**common)
+    with_tilt = calculate_ctf_thickness_2d(
+        **common,
+        beam_tilt_mrad=torch.tensor([[1.5, -0.5]]),
+        odd_zernike_coeffs={"Z31c": torch.tensor(0.05)},
+    )
+    assert torch.allclose(base, with_tilt)
+    assert not torch.is_complex(base)
+
+
+def test_ctf_thickness_invalid_geometry():
+    with pytest.raises(ValueError, match="geometry must be"):
+        calculate_ctf_with_thickness(
+            "3d",
+            False,
+            100.0,
+            defocus=1.5,
+            voltage=300.0,
+            spherical_aberration=2.7,
+            amplitude_contrast=0.1,
+            phase_shift=0.0,
+            pixel_size=8.0,
+            n_samples=8,
+            oversampling_factor=1,
+        )
