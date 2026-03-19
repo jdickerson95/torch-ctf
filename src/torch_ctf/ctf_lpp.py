@@ -459,6 +459,7 @@ def calc_LPP_ctf_2D(
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
     transform_matrix: torch.Tensor | None = None,
+    return_complex_ctf: bool = False,
 ) -> torch.Tensor:
     """Calculate the Laser Phase Plate (LPP) modified CTF for a 2D image.
 
@@ -525,6 +526,8 @@ def calc_LPP_ctf_2D(
         Optional 2x2 transformation matrix for anisotropic magnification.
         This should be the real-space transformation matrix A. The frequency-space
         transformation (A^-1)^T is automatically computed and applied.
+    return_complex_ctf: bool = False,
+        Whether to return the complex CTF e^(-i*chi)
 
     Returns
     -------
@@ -650,19 +653,29 @@ def calc_LPP_ctf_2D(
             theta,
         )
 
-    # Calculate CTF
+    # --- compute antisymmetric phase if needed ---
+    if odd_zernike_coeffs is not None or beam_tilt_mrad is not None:
+        antisymmetric_phase_shift = apply_odd_zernikes(
+            odd_zernikes=odd_zernike_coeffs,
+            rho=rho,
+            theta=theta,
+            voltage_kv=voltage,
+            spherical_aberration_mm=spherical_aberration,
+            beam_tilt_mrad=beam_tilt_mrad,
+        )
+    else:
+        antisymmetric_phase_shift = torch.zeros_like(total_phase_shift)
+
+    # --- return complex CTF ---
+    if return_complex_ctf:
+        # total phase includes symmetric (with amplitude contrast) + antisymmetric
+        total_phase = total_phase_shift + antisymmetric_phase_shift
+        return torch.exp(-1j * total_phase)
+
+    # --- default: real WPOA CTF (unchanged behavior) ---
     ctf = -torch.sin(total_phase_shift)
 
-    # Apply odd Zernike coefficients if provided
     if odd_zernike_coeffs is None and beam_tilt_mrad is None:
         return ctf
 
-    antisymmetric_phase_shift = apply_odd_zernikes(
-        odd_zernikes=odd_zernike_coeffs,
-        rho=rho,
-        theta=theta,
-        voltage_kv=voltage,
-        spherical_aberration_mm=spherical_aberration,
-        beam_tilt_mrad=beam_tilt_mrad,
-    )
     return ctf * torch.exp(1j * antisymmetric_phase_shift)

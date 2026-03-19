@@ -1380,6 +1380,115 @@ def test_2d_ctf_with_beam_tilt_only():
     assert torch.is_complex(result)
 
 
+def test_calculate_ctf_2d_return_complex_ctf_symmetric_path():
+    """e^(-i*chi) has unit modulus; imag equals WPOA CTF if antisymmetric phase is 0."""
+    common = {
+        "defocus": 1.5,
+        "astigmatism": 0.0,
+        "astigmatism_angle": 0.0,
+        "pixel_size": 8.0,
+        "voltage": 300.0,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "phase_shift": 15.0,
+        "image_shape": (10, 10),
+        "rfft": False,
+        "fftshift": False,
+    }
+    ctf_c = calculate_ctf_2d(**common, return_complex_ctf=True)
+    ctf_real = calculate_ctf_2d(**common, return_complex_ctf=False)
+
+    assert torch.is_complex(ctf_c)
+    assert ctf_c.shape == ctf_real.shape
+    assert torch.all(torch.isfinite(ctf_c))
+    assert torch.allclose(torch.abs(ctf_c), torch.ones_like(ctf_c.real), atol=1e-5)
+    assert torch.allclose(ctf_c.imag, ctf_real, atol=1e-5)
+
+
+def test_calculate_ctf_2d_return_complex_ctf_rfft_shape_and_unit_modulus():
+    """With rfft, output uses the non-redundant half shape and has unit modulus."""
+    ctf_c = calculate_ctf_2d(
+        defocus=1.5,
+        astigmatism=0,
+        astigmatism_angle=0,
+        pixel_size=8,
+        voltage=300,
+        spherical_aberration=2.7,
+        amplitude_contrast=0.1,
+        phase_shift=0,
+        image_shape=(10, 10),
+        rfft=True,
+        fftshift=False,
+        return_complex_ctf=True,
+    )
+    assert ctf_c.shape == (10, 6)
+    assert torch.is_complex(ctf_c)
+    assert torch.allclose(torch.abs(ctf_c), torch.ones_like(ctf_c.real), atol=1e-5)
+
+
+def test_calculate_ctf_2d_return_complex_ctf_beam_tilt_matches_manual_phase():
+    """return_complex_ctf includes antisymmetric phase in e^(-i*(chi_s+chi_a))."""
+    from torch_ctf.ctf_2d import _setup_ctf_2d
+
+    kwargs = {
+        "defocus": 1.5,
+        "astigmatism": 0.0,
+        "astigmatism_angle": 0.0,
+        "voltage": 300.0,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "phase_shift": 0.0,
+        "pixel_size": 8.0,
+        "image_shape": (10, 10),
+        "rfft": False,
+        "fftshift": False,
+        "beam_tilt_mrad": torch.tensor([[1.0, 2.0]]),
+    }
+    out = calculate_ctf_2d(**kwargs, return_complex_ctf=True)
+
+    (
+        defocus,
+        voltage,
+        spherical_aberration,
+        amplitude_contrast,
+        phase_shift,
+        fft_freq_grid_squared,
+        rho,
+        theta,
+    ) = _setup_ctf_2d(
+        defocus=kwargs["defocus"],
+        astigmatism=kwargs["astigmatism"],
+        astigmatism_angle=kwargs["astigmatism_angle"],
+        voltage=kwargs["voltage"],
+        spherical_aberration=kwargs["spherical_aberration"],
+        amplitude_contrast=kwargs["amplitude_contrast"],
+        phase_shift=kwargs["phase_shift"],
+        pixel_size=kwargs["pixel_size"],
+        image_shape=kwargs["image_shape"],
+        rfft=kwargs["rfft"],
+        fftshift=kwargs["fftshift"],
+        transform_matrix=None,
+    )
+    total_phase_shift = calculate_total_phase_shift(
+        defocus_um=defocus,
+        voltage_kv=voltage,
+        spherical_aberration_mm=spherical_aberration,
+        phase_shift_degrees=phase_shift,
+        amplitude_contrast_fraction=amplitude_contrast,
+        fftfreq_grid_angstrom_squared=fft_freq_grid_squared,
+    )
+    antisymmetric_phase_shift = apply_odd_zernikes(
+        odd_zernikes=None,
+        rho=rho,
+        theta=theta,
+        voltage_kv=voltage,
+        spherical_aberration_mm=spherical_aberration,
+        beam_tilt_mrad=kwargs["beam_tilt_mrad"],
+    )
+    expected = torch.exp(-1j * (total_phase_shift + antisymmetric_phase_shift))
+    assert torch.allclose(out, expected, atol=1e-5)
+
+
 # ============================================================================
 # LPP (Laser Phase Plate) Tests
 # ============================================================================
@@ -1692,6 +1801,100 @@ def test_calc_LPP_ctf_2D_with_beam_tilt_only():
     assert result.shape == (10, 10)
     assert torch.all(torch.isfinite(result))
     assert torch.is_complex(result)
+
+
+def test_calc_LPP_ctf_2D_return_complex_ctf_symmetric_path():
+    """LPP return_complex_ctf: unit modulus; imag matches real WPOA when chi_a=0."""
+    common = {
+        "defocus": 1.5,
+        "astigmatism": 0,
+        "astigmatism_angle": 0,
+        "voltage": 300,
+        "spherical_aberration": 2.7,
+        "amplitude_contrast": 0.1,
+        "pixel_size": 8,
+        "image_shape": (10, 10),
+        "rfft": False,
+        "fftshift": False,
+        "NA": 0.1,
+        "laser_wavelength_angstrom": 5000.0,
+        "focal_length_angstrom": 1e6,
+        "laser_xy_angle_deg": 0.0,
+        "laser_xz_angle_deg": 0.0,
+        "laser_long_offset_angstrom": 0.0,
+        "laser_trans_offset_angstrom": 0.0,
+        "laser_polarization_angle_deg": 0.0,
+        "peak_phase_deg": 90.0,
+    }
+    ctf_c = calc_LPP_ctf_2D(**common, return_complex_ctf=True)
+    ctf_real = calc_LPP_ctf_2D(**common, return_complex_ctf=False)
+
+    assert torch.is_complex(ctf_c)
+    assert ctf_c.shape == ctf_real.shape
+    assert torch.all(torch.isfinite(ctf_c))
+    assert torch.allclose(torch.abs(ctf_c), torch.ones_like(ctf_c.real), atol=1e-5)
+    assert torch.allclose(ctf_c.imag, ctf_real, atol=1e-5)
+
+
+def test_calc_LPP_ctf_2D_return_complex_ctf_beam_tilt_unit_modulus():
+    """LPP return_complex_ctf with beam tilt stays on the unit circle."""
+    result = calc_LPP_ctf_2D(
+        defocus=1.5,
+        astigmatism=0,
+        astigmatism_angle=0,
+        voltage=300,
+        spherical_aberration=2.7,
+        amplitude_contrast=0.1,
+        pixel_size=8,
+        image_shape=(10, 10),
+        rfft=False,
+        fftshift=False,
+        NA=0.1,
+        laser_wavelength_angstrom=5000.0,
+        focal_length_angstrom=1e6,
+        laser_xy_angle_deg=0.0,
+        laser_xz_angle_deg=0.0,
+        laser_long_offset_angstrom=0.0,
+        laser_trans_offset_angstrom=0.0,
+        laser_polarization_angle_deg=0.0,
+        peak_phase_deg=90.0,
+        beam_tilt_mrad=torch.tensor([[1.0, 2.0]]),
+        return_complex_ctf=True,
+    )
+    assert result.shape == (10, 10)
+    assert torch.is_complex(result)
+    assert torch.all(torch.isfinite(result))
+    assert torch.allclose(torch.abs(result), torch.ones_like(result.real), atol=1e-5)
+
+
+def test_calc_LPP_ctf_2D_return_complex_ctf_dual_laser():
+    """return_complex_ctf with dual_laser is complex-valued with unit modulus."""
+    result = calc_LPP_ctf_2D(
+        defocus=1.5,
+        astigmatism=0,
+        astigmatism_angle=0,
+        voltage=300,
+        spherical_aberration=2.7,
+        amplitude_contrast=0.1,
+        pixel_size=8,
+        image_shape=(10, 10),
+        rfft=False,
+        fftshift=False,
+        NA=0.1,
+        laser_wavelength_angstrom=5000.0,
+        focal_length_angstrom=1e6,
+        laser_xy_angle_deg=0.0,
+        laser_xz_angle_deg=0.0,
+        laser_long_offset_angstrom=0.0,
+        laser_trans_offset_angstrom=0.0,
+        laser_polarization_angle_deg=0.0,
+        peak_phase_deg=90.0,
+        dual_laser=True,
+        return_complex_ctf=True,
+    )
+    assert result.shape == (10, 10)
+    assert torch.is_complex(result)
+    assert torch.allclose(torch.abs(result), torch.ones_like(result.real), atol=1e-5)
 
 
 def test_calc_LPP_ctf_2D_with_even_zernikes():
