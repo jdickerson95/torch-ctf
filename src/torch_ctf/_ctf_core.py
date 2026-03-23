@@ -1,5 +1,7 @@
 """Internal core helpers for 2D CTF calculation pipelines."""
 
+from collections.abc import Callable
+
 import einops
 import torch
 from torch_grid_utils.polar_grid import fftfreq_grid_polar
@@ -11,6 +13,8 @@ from torch_ctf._ctf_preparation import (
 )
 from torch_ctf.ctf_aberrations import apply_even_zernikes, apply_odd_zernikes
 from torch_ctf.ctf_utils import calculate_total_phase_shift
+
+PhaseShiftProvider = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
 
 
 def _prepare_inputs(
@@ -159,6 +163,116 @@ def _build_freq_grid(
     return fft_freq_grid, fft_freq_grid_squared, rho, theta
 
 
+def _apply_astigmatism_to_defocus(
+    defocus: torch.Tensor,
+    astigmatism: torch.Tensor,
+    astigmatism_angle: torch.Tensor,
+    fft_freq_grid: torch.Tensor,
+    fft_freq_grid_squared: torch.Tensor,
+) -> torch.Tensor:
+    """Apply astigmatism parameterization to produce per-frequency defocus."""
+    sin_theta = torch.sin(torch.deg2rad(astigmatism_angle))
+    cos_theta = torch.cos(torch.deg2rad(astigmatism_angle))
+    unit_astigmatism_vector_yx = einops.rearrange(
+        [sin_theta, cos_theta], "yx ... -> ... yx"
+    )
+    astigmatism = einops.rearrange(astigmatism, "... -> ... 1")
+
+    # Calculate the unit vectors from the frequency grids
+    astigmatism_vector = torch.sqrt(astigmatism) * unit_astigmatism_vector_yx
+    fft_freq_grid_norm = torch.sqrt(
+        einops.rearrange(fft_freq_grid_squared, "... -> ... 1")
+        + torch.finfo(torch.float32).eps
+    )
+    direction_unitvector = fft_freq_grid / fft_freq_grid_norm
+
+    # Subtract the astigmatism from the defocus. And add the squared dot product between
+    # the direction unit-vector and the astigamatism vector (per-frequency adjustment).
+    astigmatism_adjustment = einops.einsum(
+        direction_unitvector,
+        astigmatism_vector,
+        "... h w f, ... f -> ... h w",
+    )
+    astigmatism_adjustment = (astigmatism_adjustment**2) * 2
+    defocus = defocus - einops.rearrange(astigmatism, "... -> ... 1")
+    return defocus + astigmatism_adjustment
+
+
+def _setup_ctf_context_2d(
+    defocus: float | torch.Tensor,
+    astigmatism: float | torch.Tensor,
+    astigmatism_angle: float | torch.Tensor,
+    voltage: float | torch.Tensor,
+    spherical_aberration: float | torch.Tensor,
+    amplitude_contrast: float | torch.Tensor,
+    phase_shift: float | torch.Tensor,
+    pixel_size: float | torch.Tensor,
+    image_shape: tuple[int, int],
+    rfft: bool,
+    fftshift: bool,
+    transform_matrix: torch.Tensor | None = None,
+) -> tuple[
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+    torch.Tensor,
+]:
+    """Prepare full shared 2D CTF context (inputs, grids, and polar coords)."""
+    (
+        defocus,
+        astigmatism,
+        astigmatism_angle,
+        voltage,
+        spherical_aberration,
+        amplitude_contrast,
+        phase_shift,
+        pixel_size,
+        device,
+    ) = _prepare_inputs(
+        defocus=defocus,
+        astigmatism=astigmatism,
+        astigmatism_angle=astigmatism_angle,
+        voltage=voltage,
+        spherical_aberration=spherical_aberration,
+        amplitude_contrast=amplitude_contrast,
+        phase_shift=phase_shift,
+        pixel_size=pixel_size,
+    )
+
+    fft_freq_grid, fft_freq_grid_squared, rho, theta = _build_freq_grid(
+        image_shape=image_shape,
+        pixel_size=pixel_size,
+        rfft=rfft,
+        fftshift=fftshift,
+        device=device,
+        transform_matrix=transform_matrix,
+    )
+    defocus = _apply_astigmatism_to_defocus(
+        defocus=defocus,
+        astigmatism=astigmatism,
+        astigmatism_angle=astigmatism_angle,
+        fft_freq_grid=fft_freq_grid,
+        fft_freq_grid_squared=fft_freq_grid_squared,
+    )
+
+    return (
+        defocus,
+        voltage,
+        spherical_aberration,
+        amplitude_contrast,
+        phase_shift,
+        fft_freq_grid,
+        fft_freq_grid_squared,
+        rho,
+        theta,
+    )
+
+
 def _phase_symmetric(
     defocus: torch.Tensor,
     voltage: torch.Tensor,
@@ -169,6 +283,8 @@ def _phase_symmetric(
     rho: torch.Tensor,
     theta: torch.Tensor,
     even_zernike_coeffs: dict | None,
+    phase_shift_provider: PhaseShiftProvider | None = None,
+    fft_freq_grid: torch.Tensor | None = None,
 ) -> torch.Tensor:
     """Compute the symmetric phase component of the CTF.
 
@@ -197,17 +313,30 @@ def _phase_symmetric(
         Optional dictionary of even Zernike coefficients to apply as additional
         symmetric aberrations. The keys should be the Zernike mode indices
         (n, m) and the values should be the corresponding coefficients in radians.
+    phase_shift_provider : PhaseShiftProvider | None
+        Optional callable that takes the frequency grid and voltage as input and returns
+        a custom phase shift in degrees to use instead of the `phase_shift` input.
+    fft_freq_grid : torch.Tensor | None
+        The 2D frequency grid in cycles/Angstrom, with shape (..., Hf, Wf, 2).
 
     Returns
     -------
     total_phase_shift : torch.Tensor
         The total symmetric phase shift of the CTF in radians, with shape (..., Hf, Wf).
     """
+    phase_shift_degrees = phase_shift
+    if phase_shift_provider is not None:
+        if fft_freq_grid is None:
+            raise ValueError(
+                "fft_freq_grid must be provided when using phase_shift_provider"
+            )
+        phase_shift_degrees = phase_shift_provider(fft_freq_grid, voltage)
+
     total_phase_shift = calculate_total_phase_shift(
         defocus_um=defocus,
         voltage_kv=voltage,
         spherical_aberration_mm=spherical_aberration,
-        phase_shift_degrees=phase_shift,
+        phase_shift_degrees=phase_shift_degrees,
         amplitude_contrast_fraction=amplitude_contrast,
         fftfreq_grid_angstrom_squared=fft_freq_grid_squared,
     )
@@ -303,3 +432,14 @@ def _render_ctf(
     if not include_antisymmetric_phase:
         return ctf
     return ctf * torch.exp(1j * antisymmetric_phase_shift)
+
+
+def _render_modulated_transfer(
+    modulated_transfer: torch.Tensor,
+    antisymmetric_phase_shift: torch.Tensor,
+    include_antisymmetric_phase: bool,
+) -> torch.Tensor:
+    """Render pre-modulated transfer output with optional antisymmetric phase."""
+    if not include_antisymmetric_phase:
+        return modulated_transfer
+    return modulated_transfer * torch.exp(1j * antisymmetric_phase_shift)

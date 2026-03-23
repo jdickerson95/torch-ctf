@@ -2,21 +2,28 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any, Literal
 
 import einops
 import torch
-from torch_grid_utils.fftfreq_grid import fftfreq_grid, transform_fftfreq_grid
 
-from torch_ctf.ctf_1d import _setup_ctf_1d
-from torch_ctf.ctf_2d import _setup_ctf_2d
-from torch_ctf.ctf_aberrations import (
-    apply_even_zernikes,
-    apply_odd_zernikes,
-    calculate_relativistic_electron_wavelength,
+from torch_ctf._ctf_core import (
+    PhaseShiftProvider,
+    _phase_antisymmetric,
+    _phase_symmetric,
+    _render_modulated_transfer,
+    _setup_ctf_context_2d,
 )
-from torch_ctf.ctf_lpp import calc_LPP_phase
+from torch_ctf.ctf_1d import _setup_ctf_1d
+from torch_ctf.ctf_aberrations import calculate_relativistic_electron_wavelength
+from torch_ctf.ctf_lpp import _lpp_phase_shift_degrees_from_grid
 from torch_ctf.ctf_utils import calculate_total_phase_shift
+
+ThicknessModulator = Callable[
+    [torch.Tensor, torch.Tensor, torch.Tensor, float | torch.Tensor],
+    torch.Tensor,
+]
 
 
 def _sinc_sin_over_x(x: torch.Tensor) -> torch.Tensor:
@@ -161,6 +168,92 @@ def calculate_ctf_thickness_1d(
     return ctf
 
 
+def _calculate_ctf_thickness_2d_or_lpp(
+    return_power_spectrum: bool,
+    sample_thickness_angstrom: float | torch.Tensor,
+    defocus: float | torch.Tensor,
+    astigmatism: float | torch.Tensor,
+    astigmatism_angle: float | torch.Tensor,
+    voltage: float | torch.Tensor,
+    spherical_aberration: float | torch.Tensor,
+    amplitude_contrast: float | torch.Tensor,
+    phase_shift: float | torch.Tensor,
+    pixel_size: float | torch.Tensor,
+    image_shape: tuple[int, int],
+    rfft: bool,
+    fftshift: bool,
+    beam_tilt_mrad: torch.Tensor | None,
+    even_zernike_coeffs: dict | None,
+    odd_zernike_coeffs: dict | None,
+    transform_matrix: torch.Tensor | None,
+    phase_shift_provider: PhaseShiftProvider | None,
+    thickness_modulator: ThicknessModulator,
+) -> torch.Tensor:
+    """Shared orchestration for 2D/LPP thickness CTF calculations."""
+    (
+        defocus,
+        voltage,
+        spherical_aberration,
+        amplitude_contrast,
+        phase_shift,
+        fft_freq_grid,
+        g2,
+        rho,
+        theta,
+    ) = _setup_ctf_context_2d(
+        defocus=defocus,
+        astigmatism=astigmatism,
+        astigmatism_angle=astigmatism_angle,
+        voltage=voltage,
+        spherical_aberration=spherical_aberration,
+        amplitude_contrast=amplitude_contrast,
+        phase_shift=phase_shift,
+        pixel_size=pixel_size,
+        image_shape=image_shape,
+        rfft=rfft,
+        fftshift=fftshift,
+        transform_matrix=transform_matrix,
+    )
+
+    chi = _phase_symmetric(
+        defocus=defocus,
+        voltage=voltage,
+        spherical_aberration=spherical_aberration,
+        amplitude_contrast=amplitude_contrast,
+        phase_shift=phase_shift,
+        fft_freq_grid_squared=g2,
+        rho=rho,
+        theta=theta,
+        even_zernike_coeffs=even_zernike_coeffs,
+        phase_shift_provider=phase_shift_provider,
+        fft_freq_grid=fft_freq_grid,
+    )
+
+    lam = calculate_relativistic_electron_wavelength(voltage * 1e3) * 1e10
+    ctf = thickness_modulator(lam, g2, chi, sample_thickness_angstrom)
+
+    if return_power_spectrum:
+        return ctf
+
+    include_antisymmetric_phase = (
+        odd_zernike_coeffs is not None or beam_tilt_mrad is not None
+    )
+    antisymmetric_phase_shift = _phase_antisymmetric(
+        reference=chi,
+        voltage=voltage,
+        spherical_aberration=spherical_aberration,
+        rho=rho,
+        theta=theta,
+        beam_tilt_mrad=beam_tilt_mrad,
+        odd_zernike_coeffs=odd_zernike_coeffs,
+    )
+    return _render_modulated_transfer(
+        modulated_transfer=ctf,
+        antisymmetric_phase_shift=antisymmetric_phase_shift,
+        include_antisymmetric_phase=include_antisymmetric_phase,
+    )
+
+
 def calculate_ctf_thickness_2d(
     return_power_spectrum: bool,
     sample_thickness_angstrom: float | torch.Tensor,
@@ -238,16 +331,9 @@ def calculate_ctf_thickness_2d(
         aberrations; otherwise complex.
 
     """
-    (
-        defocus,
-        voltage,
-        spherical_aberration,
-        amplitude_contrast,
-        phase_shift,
-        g2,
-        rho,
-        theta,
-    ) = _setup_ctf_2d(
+    return _calculate_ctf_thickness_2d_or_lpp(
+        return_power_spectrum=return_power_spectrum,
+        sample_thickness_angstrom=sample_thickness_angstrom,
         defocus=defocus,
         astigmatism=astigmatism,
         astigmatism_angle=astigmatism_angle,
@@ -259,39 +345,19 @@ def calculate_ctf_thickness_2d(
         image_shape=image_shape,
         rfft=rfft,
         fftshift=fftshift,
-        transform_matrix=transform_matrix,
-    )
-
-    chi = calculate_total_phase_shift(
-        defocus_um=defocus,
-        voltage_kv=voltage,
-        spherical_aberration_mm=spherical_aberration,
-        phase_shift_degrees=phase_shift,
-        amplitude_contrast_fraction=amplitude_contrast,
-        fftfreq_grid_angstrom_squared=g2,
-    )
-    if even_zernike_coeffs is not None:
-        chi = apply_even_zernikes(even_zernike_coeffs, chi, rho, theta)
-
-    lam = calculate_relativistic_electron_wavelength(voltage * 1e3) * 1e10
-    ctf = _ctf_from_thickness(
-        return_power_spectrum, lam, g2, chi, sample_thickness_angstrom
-    )
-
-    if return_power_spectrum:
-        return ctf
-    if odd_zernike_coeffs is None and beam_tilt_mrad is None:
-        return ctf
-
-    antisymmetric_phase_shift = apply_odd_zernikes(
-        odd_zernikes=odd_zernike_coeffs,
-        rho=rho,
-        theta=theta,
-        voltage_kv=voltage,
-        spherical_aberration_mm=spherical_aberration,
         beam_tilt_mrad=beam_tilt_mrad,
+        even_zernike_coeffs=even_zernike_coeffs,
+        odd_zernike_coeffs=odd_zernike_coeffs,
+        transform_matrix=transform_matrix,
+        phase_shift_provider=None,
+        thickness_modulator=lambda lam, g2, chi, t: _ctf_from_thickness(
+            return_power_spectrum,
+            lam,
+            g2,
+            chi,
+            t,
+        ),
     )
-    return ctf * torch.exp(1j * antisymmetric_phase_shift)
 
 
 def calculate_ctf_thickness_lpp(
@@ -392,16 +458,29 @@ def calculate_ctf_thickness_lpp(
         Thickness-modulated LPP CTF (real for power spectrum or no odd phase).
 
     """
-    (
-        defocus,
-        voltage,
-        spherical_aberration,
-        amplitude_contrast,
-        _,
-        g2,
-        rho,
-        theta,
-    ) = _setup_ctf_2d(
+
+    def phase_shift_provider(
+        fft_freq_grid_local: torch.Tensor,
+        voltage_local: torch.Tensor,
+    ) -> torch.Tensor:
+        return _lpp_phase_shift_degrees_from_grid(
+            fft_freq_grid=fft_freq_grid_local,
+            voltage=voltage_local,
+            NA=NA,
+            laser_wavelength_angstrom=laser_wavelength_angstrom,
+            focal_length_angstrom=focal_length_angstrom,
+            laser_xy_angle_deg=laser_xy_angle_deg,
+            laser_xz_angle_deg=laser_xz_angle_deg,
+            laser_long_offset_angstrom=laser_long_offset_angstrom,
+            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
+            laser_polarization_angle_deg=laser_polarization_angle_deg,
+            peak_phase_deg=peak_phase_deg,
+            dual_laser=dual_laser,
+        )
+
+    return _calculate_ctf_thickness_2d_or_lpp(
+        return_power_spectrum=return_power_spectrum,
+        sample_thickness_angstrom=sample_thickness_angstrom,
         defocus=defocus,
         astigmatism=astigmatism,
         astigmatism_angle=astigmatism_angle,
@@ -413,108 +492,19 @@ def calculate_ctf_thickness_lpp(
         image_shape=image_shape,
         rfft=rfft,
         fftshift=fftshift,
-        transform_matrix=transform_matrix,
-    )
-
-    if isinstance(defocus, torch.Tensor):
-        device = defocus.device
-    else:
-        device = torch.device("cpu")
-
-    pixel_size_tensor = torch.as_tensor(pixel_size, dtype=torch.float, device=device)
-    image_shape_tensor = torch.as_tensor(image_shape, dtype=torch.int, device=device)
-
-    fft_freq_grid = fftfreq_grid(
-        image_shape=image_shape_tensor,
-        rfft=rfft,
-        fftshift=fftshift,
-        norm=False,
-        device=device,
-    )
-    if transform_matrix is not None:
-        fft_freq_grid = transform_fftfreq_grid(
-            frequency_grid=fft_freq_grid,
-            real_space_matrix=transform_matrix,
-            device=device,
-        )
-    fft_freq_grid = fft_freq_grid / einops.rearrange(
-        pixel_size_tensor, "... -> ... 1 1 1"
-    )
-
-    if dual_laser:
-        phase1 = calc_LPP_phase(
-            fft_freq_grid=fft_freq_grid,
-            NA=NA,
-            laser_wavelength_angstrom=laser_wavelength_angstrom,
-            focal_length_angstrom=focal_length_angstrom,
-            laser_xy_angle_deg=laser_xy_angle_deg,
-            laser_xz_angle_deg=laser_xz_angle_deg,
-            laser_long_offset_angstrom=laser_long_offset_angstrom,
-            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
-            laser_polarization_angle_deg=laser_polarization_angle_deg,
-            peak_phase_deg=peak_phase_deg,
-            voltage=voltage,
-        )
-        phase2 = calc_LPP_phase(
-            fft_freq_grid=fft_freq_grid,
-            NA=NA,
-            laser_wavelength_angstrom=laser_wavelength_angstrom,
-            focal_length_angstrom=focal_length_angstrom,
-            laser_xy_angle_deg=laser_xy_angle_deg + 90,
-            laser_xz_angle_deg=laser_xz_angle_deg,
-            laser_long_offset_angstrom=laser_long_offset_angstrom,
-            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
-            laser_polarization_angle_deg=laser_polarization_angle_deg,
-            peak_phase_deg=peak_phase_deg,
-            voltage=voltage,
-        )
-        laser_phase_radians = phase1 + phase2
-    else:
-        laser_phase_radians = calc_LPP_phase(
-            fft_freq_grid=fft_freq_grid,
-            NA=NA,
-            laser_wavelength_angstrom=laser_wavelength_angstrom,
-            focal_length_angstrom=focal_length_angstrom,
-            laser_xy_angle_deg=laser_xy_angle_deg,
-            laser_xz_angle_deg=laser_xz_angle_deg,
-            laser_long_offset_angstrom=laser_long_offset_angstrom,
-            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
-            laser_polarization_angle_deg=laser_polarization_angle_deg,
-            peak_phase_deg=peak_phase_deg,
-            voltage=voltage,
-        )
-
-    laser_phase_degrees = torch.rad2deg(laser_phase_radians)
-    chi = calculate_total_phase_shift(
-        defocus_um=defocus,
-        voltage_kv=voltage,
-        spherical_aberration_mm=spherical_aberration,
-        phase_shift_degrees=laser_phase_degrees,
-        amplitude_contrast_fraction=amplitude_contrast,
-        fftfreq_grid_angstrom_squared=g2,
-    )
-    if even_zernike_coeffs is not None:
-        chi = apply_even_zernikes(even_zernike_coeffs, chi, rho, theta)
-
-    lam = calculate_relativistic_electron_wavelength(voltage * 1e3) * 1e10
-    ctf = _ctf_from_thickness(
-        return_power_spectrum, lam, g2, chi, sample_thickness_angstrom
-    )
-
-    if return_power_spectrum:
-        return ctf
-    if odd_zernike_coeffs is None and beam_tilt_mrad is None:
-        return ctf
-
-    antisymmetric_phase_shift = apply_odd_zernikes(
-        odd_zernikes=odd_zernike_coeffs,
-        rho=rho,
-        theta=theta,
-        voltage_kv=voltage,
-        spherical_aberration_mm=spherical_aberration,
         beam_tilt_mrad=beam_tilt_mrad,
+        even_zernike_coeffs=even_zernike_coeffs,
+        odd_zernike_coeffs=odd_zernike_coeffs,
+        transform_matrix=transform_matrix,
+        phase_shift_provider=phase_shift_provider,
+        thickness_modulator=lambda lam, g2, chi, t: _ctf_from_thickness(
+            return_power_spectrum,
+            lam,
+            g2,
+            chi,
+            t,
+        ),
     )
-    return ctf * torch.exp(1j * antisymmetric_phase_shift)
 
 
 def calculate_ctf_with_thickness(

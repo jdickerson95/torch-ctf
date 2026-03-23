@@ -1,14 +1,12 @@
 """2D CTF calculation functions."""
 
-import einops
 import torch
 
 from torch_ctf._ctf_core import (
-    _build_freq_grid,
     _phase_antisymmetric,
     _phase_symmetric,
-    _prepare_inputs,
     _render_ctf,
+    _setup_ctf_context_2d,
 )
 
 
@@ -209,15 +207,15 @@ def _setup_ctf_2d(
     """
     (
         defocus,
-        astigmatism,
-        astigmatism_angle,
         voltage,
         spherical_aberration,
         amplitude_contrast,
         phase_shift,
-        pixel_size,
-        device,
-    ) = _prepare_inputs(
+        _,
+        fft_freq_grid_squared,
+        rho,
+        theta,
+    ) = _setup_ctf_context_2d(
         defocus=defocus,
         astigmatism=astigmatism,
         astigmatism_angle=astigmatism_angle,
@@ -226,42 +224,11 @@ def _setup_ctf_2d(
         amplitude_contrast=amplitude_contrast,
         phase_shift=phase_shift,
         pixel_size=pixel_size,
-    )
-
-    fft_freq_grid, fft_freq_grid_squared, rho, theta = _build_freq_grid(
         image_shape=image_shape,
-        pixel_size=pixel_size,
         rfft=rfft,
         fftshift=fftshift,
-        device=device,
         transform_matrix=transform_matrix,
     )
-
-    # Calculate the astigmatism vector
-    sin_theta = torch.sin(torch.deg2rad(astigmatism_angle))
-    cos_theta = torch.cos(torch.deg2rad(astigmatism_angle))
-    unit_astigmatism_vector_yx = einops.rearrange(
-        [sin_theta, cos_theta], "yx ... -> ... yx"
-    )
-    astigmatism = einops.rearrange(astigmatism, "... -> ... 1")
-
-    # Multiply by square root of astigmatism to get right amplitude after squaring later
-    astigmatism_vector = torch.sqrt(astigmatism) * unit_astigmatism_vector_yx
-
-    # Calculate unitvectors from the frequency grids
-    fft_freq_grid_norm = torch.sqrt(
-        einops.rearrange(fft_freq_grid_squared, "... -> ... 1")
-        + torch.finfo(torch.float32).eps
-    )
-    direction_unitvector = fft_freq_grid / fft_freq_grid_norm
-
-    # Subtract the astigmatism from the defocus
-    # Add the squared dotproduct between the direction unitvector
-    # and the astigmatism vector
-    du = direction_unitvector
-    av = astigmatism_vector
-    defocus -= einops.rearrange(astigmatism, "... -> ... 1")
-    defocus = defocus + einops.einsum(du, av, "... h w f, ... f -> ... h w") ** 2 * 2
 
     return (
         defocus,
