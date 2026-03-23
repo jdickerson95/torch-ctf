@@ -2,11 +2,14 @@
 
 import einops
 import torch
-from torch_grid_utils.fftfreq_grid import fftfreq_grid, transform_fftfreq_grid
-from torch_grid_utils.polar_grid import fftfreq_grid_polar
 
-from torch_ctf.ctf_aberrations import apply_even_zernikes, apply_odd_zernikes
-from torch_ctf.ctf_utils import calculate_total_phase_shift
+from torch_ctf._ctf_core import (
+    _build_freq_grid,
+    _phase_antisymmetric,
+    _phase_symmetric,
+    _prepare_inputs,
+    _render_ctf,
+)
 
 
 def calculate_ctf_2d(
@@ -101,48 +104,36 @@ def calculate_ctf_2d(
         transform_matrix=transform_matrix,
     )
 
-    total_phase_shift = calculate_total_phase_shift(
-        defocus_um=defocus,
-        voltage_kv=voltage,
-        spherical_aberration_mm=spherical_aberration,
-        phase_shift_degrees=phase_shift,
-        amplitude_contrast_fraction=amplitude_contrast,
-        fftfreq_grid_angstrom_squared=fft_freq_grid_squared,
+    total_phase_shift = _phase_symmetric(
+        defocus=defocus,
+        voltage=voltage,
+        spherical_aberration=spherical_aberration,
+        amplitude_contrast=amplitude_contrast,
+        phase_shift=phase_shift,
+        fft_freq_grid_squared=fft_freq_grid_squared,
+        rho=rho,
+        theta=theta,
+        even_zernike_coeffs=even_zernike_coeffs,
     )
-    if even_zernike_coeffs is not None:
-        total_phase_shift = apply_even_zernikes(
-            even_zernike_coeffs,
-            total_phase_shift,
-            rho,
-            theta,
-        )
+    include_antisymmetric_phase = (
+        odd_zernike_coeffs is not None or beam_tilt_mrad is not None
+    )
+    antisymmetric_phase_shift = _phase_antisymmetric(
+        odd_zernike_coeffs=odd_zernike_coeffs,
+        beam_tilt_mrad=beam_tilt_mrad,
+        rho=rho,
+        theta=theta,
+        voltage=voltage,
+        spherical_aberration=spherical_aberration,
+        reference=total_phase_shift,
+    )
 
-    # --- compute antisymmetric phase if needed ---
-    if odd_zernike_coeffs is not None or beam_tilt_mrad is not None:
-        antisymmetric_phase_shift = apply_odd_zernikes(
-            odd_zernikes=odd_zernike_coeffs,
-            rho=rho,
-            theta=theta,
-            voltage_kv=voltage,
-            spherical_aberration_mm=spherical_aberration,
-            beam_tilt_mrad=beam_tilt_mrad,
-        )
-    else:
-        antisymmetric_phase_shift = torch.zeros_like(total_phase_shift)
-
-    # --- return complex CTF ---
-    if return_complex_ctf:
-        # total phase includes symmetric (with amplitude contrast) + antisymmetric
-        total_phase = total_phase_shift + antisymmetric_phase_shift
-        return torch.exp(-1j * total_phase)
-
-    # --- default: real WPOA CTF (unchanged behavior) ---
-    ctf = -torch.sin(total_phase_shift)
-
-    if odd_zernike_coeffs is None and beam_tilt_mrad is None:
-        return ctf
-
-    return ctf * torch.exp(1j * antisymmetric_phase_shift)
+    return _render_ctf(
+        symmetric_phase_shift=total_phase_shift,
+        antisymmetric_phase_shift=antisymmetric_phase_shift,
+        return_complex_ctf=return_complex_ctf,
+        include_antisymmetric_phase=include_antisymmetric_phase,
+    )
 
 
 def _setup_ctf_2d(
@@ -216,51 +207,34 @@ def _setup_ctf_2d(
     fft_freq_grid_squared : torch.Tensor
         Squared frequency grid in Angstroms^-2.
     """
-    if isinstance(defocus, torch.Tensor):
-        device = defocus.device
-    else:
-        device = torch.device("cpu")
-
-    # to torch.Tensor
-    defocus = torch.as_tensor(defocus, dtype=torch.float, device=device)
-    astigmatism = torch.as_tensor(astigmatism, dtype=torch.float, device=device)
-    astigmatism_angle = torch.as_tensor(
-        astigmatism_angle, dtype=torch.float, device=device
+    (
+        defocus,
+        astigmatism,
+        astigmatism_angle,
+        voltage,
+        spherical_aberration,
+        amplitude_contrast,
+        phase_shift,
+        pixel_size,
+        device,
+    ) = _prepare_inputs(
+        defocus=defocus,
+        astigmatism=astigmatism,
+        astigmatism_angle=astigmatism_angle,
+        voltage=voltage,
+        spherical_aberration=spherical_aberration,
+        amplitude_contrast=amplitude_contrast,
+        phase_shift=phase_shift,
+        pixel_size=pixel_size,
     )
-    pixel_size = torch.as_tensor(pixel_size, dtype=torch.float, device=device)
-    voltage = torch.as_tensor(voltage, dtype=torch.float, device=device)
-    spherical_aberration = torch.as_tensor(
-        spherical_aberration, dtype=torch.float, device=device
-    )
-    amplitude_contrast = torch.as_tensor(
-        amplitude_contrast, dtype=torch.float, device=device
-    )
-    phase_shift = torch.as_tensor(phase_shift, dtype=torch.float, device=device)
-    image_shape = torch.as_tensor(image_shape, dtype=torch.int, device=device)
 
-    defocus = einops.rearrange(defocus, "... -> ... 1 1")
-    voltage = einops.rearrange(voltage, "... -> ... 1 1")
-    spherical_aberration = einops.rearrange(spherical_aberration, "... -> ... 1 1")
-    amplitude_contrast = einops.rearrange(amplitude_contrast, "... -> ... 1 1")
-    phase_shift = einops.rearrange(phase_shift, "... -> ... 1 1")
-
-    # construct 2D frequency grids and rescale cycles / px -> cycles / Å
-    fft_freq_grid = fftfreq_grid(
+    fft_freq_grid, fft_freq_grid_squared, rho, theta = _build_freq_grid(
         image_shape=image_shape,
+        pixel_size=pixel_size,
         rfft=rfft,
         fftshift=fftshift,
-        norm=False,
         device=device,
-    )
-    if transform_matrix is not None:
-        fft_freq_grid = transform_fftfreq_grid(
-            frequency_grid=fft_freq_grid,
-            real_space_matrix=transform_matrix,
-            device=device,
-        )
-    fft_freq_grid = fft_freq_grid / einops.rearrange(pixel_size, "... -> ... 1 1 1")
-    fft_freq_grid_squared = einops.reduce(
-        fft_freq_grid**2, "... f->...", reduction="sum"
+        transform_matrix=transform_matrix,
     )
 
     # Calculate the astigmatism vector
@@ -270,31 +244,24 @@ def _setup_ctf_2d(
         [sin_theta, cos_theta], "yx ... -> ... yx"
     )
     astigmatism = einops.rearrange(astigmatism, "... -> ... 1")
-    # Multiply with the square root of astigmatism
-    # to get the right amplitude after squaring later
+
+    # Multiply by square root of astigmatism to get right amplitude after squaring later
     astigmatism_vector = torch.sqrt(astigmatism) * unit_astigmatism_vector_yx
+
     # Calculate unitvectors from the frequency grids
-    # Reuse already computed fft_freq_grid_squared to avoid redundant pow operations
     fft_freq_grid_norm = torch.sqrt(
         einops.rearrange(fft_freq_grid_squared, "... -> ... 1")
         + torch.finfo(torch.float32).eps
     )
     direction_unitvector = fft_freq_grid / fft_freq_grid_norm
+
     # Subtract the astigmatism from the defocus
-    defocus -= einops.rearrange(astigmatism, "... -> ... 1")
     # Add the squared dotproduct between the direction unitvector
     # and the astigmatism vector
-    defocus = (
-        defocus
-        + einops.einsum(
-            direction_unitvector, astigmatism_vector, "... h w f, ... f -> ... h w"
-        )
-        ** 2
-        * 2
-    )
-
-    # get polar coordinates
-    rho, theta = fftfreq_grid_polar(fft_freq_grid)
+    du = direction_unitvector
+    av = astigmatism_vector
+    defocus -= einops.rearrange(astigmatism, "... -> ... 1")
+    defocus = defocus + einops.einsum(du, av, "... h w f, ... f -> ... h w") ** 2 * 2
 
     return (
         defocus,
