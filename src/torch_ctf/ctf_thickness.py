@@ -26,6 +26,64 @@ ThicknessModulator = Callable[
 ]
 
 
+def _make_standard_thickness_modulator(
+    return_power_spectrum: bool,
+) -> ThicknessModulator:
+    """Create the standard thickness modulation hook for 2D/LPP orchestration."""
+
+    def thickness_modulator(
+        lam: torch.Tensor,
+        g2: torch.Tensor,
+        chi: torch.Tensor,
+        thickness_angstrom: float | torch.Tensor,
+    ) -> torch.Tensor:
+        return _ctf_from_thickness(
+            return_power_spectrum,
+            lam,
+            g2,
+            chi,
+            thickness_angstrom,
+        )
+
+    return thickness_modulator
+
+
+def _make_lpp_phase_shift_provider(
+    NA: float,
+    laser_wavelength_angstrom: float,
+    focal_length_angstrom: float,
+    laser_xy_angle_deg: float,
+    laser_xz_angle_deg: float,
+    laser_long_offset_angstrom: float,
+    laser_trans_offset_angstrom: float,
+    laser_polarization_angle_deg: float,
+    peak_phase_deg: float,
+    dual_laser: bool,
+) -> PhaseShiftProvider:
+    """Create a named LPP phase provider for thickness + LPP orchestration."""
+
+    def phase_shift_provider(
+        fft_freq_grid_local: torch.Tensor,
+        voltage_local: torch.Tensor,
+    ) -> torch.Tensor:
+        return _lpp_phase_shift_degrees_from_grid(
+            fft_freq_grid=fft_freq_grid_local,
+            voltage=voltage_local,
+            NA=NA,
+            laser_wavelength_angstrom=laser_wavelength_angstrom,
+            focal_length_angstrom=focal_length_angstrom,
+            laser_xy_angle_deg=laser_xy_angle_deg,
+            laser_xz_angle_deg=laser_xz_angle_deg,
+            laser_long_offset_angstrom=laser_long_offset_angstrom,
+            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
+            laser_polarization_angle_deg=laser_polarization_angle_deg,
+            peak_phase_deg=peak_phase_deg,
+            dual_laser=dual_laser,
+        )
+
+    return phase_shift_provider
+
+
 def _sinc_sin_over_x(x: torch.Tensor) -> torch.Tensor:
     """Compute sin(x)/x with numerical limit 1 at x=0.
 
@@ -350,12 +408,8 @@ def calculate_ctf_thickness_2d(
         odd_zernike_coeffs=odd_zernike_coeffs,
         transform_matrix=transform_matrix,
         phase_shift_provider=None,
-        thickness_modulator=lambda lam, g2, chi, t: _ctf_from_thickness(
-            return_power_spectrum,
-            lam,
-            g2,
-            chi,
-            t,
+        thickness_modulator=_make_standard_thickness_modulator(
+            return_power_spectrum=return_power_spectrum
         ),
     )
 
@@ -458,25 +512,18 @@ def calculate_ctf_thickness_lpp(
         Thickness-modulated LPP CTF (real for power spectrum or no odd phase).
 
     """
-
-    def phase_shift_provider(
-        fft_freq_grid_local: torch.Tensor,
-        voltage_local: torch.Tensor,
-    ) -> torch.Tensor:
-        return _lpp_phase_shift_degrees_from_grid(
-            fft_freq_grid=fft_freq_grid_local,
-            voltage=voltage_local,
-            NA=NA,
-            laser_wavelength_angstrom=laser_wavelength_angstrom,
-            focal_length_angstrom=focal_length_angstrom,
-            laser_xy_angle_deg=laser_xy_angle_deg,
-            laser_xz_angle_deg=laser_xz_angle_deg,
-            laser_long_offset_angstrom=laser_long_offset_angstrom,
-            laser_trans_offset_angstrom=laser_trans_offset_angstrom,
-            laser_polarization_angle_deg=laser_polarization_angle_deg,
-            peak_phase_deg=peak_phase_deg,
-            dual_laser=dual_laser,
-        )
+    phase_shift_provider = _make_lpp_phase_shift_provider(
+        NA=NA,
+        laser_wavelength_angstrom=laser_wavelength_angstrom,
+        focal_length_angstrom=focal_length_angstrom,
+        laser_xy_angle_deg=laser_xy_angle_deg,
+        laser_xz_angle_deg=laser_xz_angle_deg,
+        laser_long_offset_angstrom=laser_long_offset_angstrom,
+        laser_trans_offset_angstrom=laser_trans_offset_angstrom,
+        laser_polarization_angle_deg=laser_polarization_angle_deg,
+        peak_phase_deg=peak_phase_deg,
+        dual_laser=dual_laser,
+    )
 
     return _calculate_ctf_thickness_2d_or_lpp(
         return_power_spectrum=return_power_spectrum,
@@ -487,6 +534,7 @@ def calculate_ctf_thickness_lpp(
         voltage=voltage,
         spherical_aberration=spherical_aberration,
         amplitude_contrast=amplitude_contrast,
+        # Placeholder, actual shift is provided by laser phase plate calculation
         phase_shift=torch.tensor(0.0),
         pixel_size=pixel_size,
         image_shape=image_shape,
@@ -497,12 +545,8 @@ def calculate_ctf_thickness_lpp(
         odd_zernike_coeffs=odd_zernike_coeffs,
         transform_matrix=transform_matrix,
         phase_shift_provider=phase_shift_provider,
-        thickness_modulator=lambda lam, g2, chi, t: _ctf_from_thickness(
-            return_power_spectrum,
-            lam,
-            g2,
-            chi,
-            t,
+        thickness_modulator=_make_standard_thickness_modulator(
+            return_power_spectrum=return_power_spectrum
         ),
     )
 
