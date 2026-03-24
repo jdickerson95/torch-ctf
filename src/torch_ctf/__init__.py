@@ -5,6 +5,7 @@ from importlib.metadata import PackageNotFoundError, version
 from torch_ctf.ctf_1d import calculate_ctf_1d
 from torch_ctf.ctf_2d import calculate_ctf_2d
 from torch_ctf.ctf_aberrations import (
+    apply_astigmatism_to_defocus,
     apply_even_zernikes,
     apply_odd_zernikes,
     beam_tilt_to_zernike_coeffs,
@@ -43,6 +44,7 @@ __author__ = "Josh Dickerson"
 __email__ = "jdickerson@berkeley.edu"
 
 __all__ = [
+    "apply_astigmatism_to_defocus",
     "apply_even_zernikes",
     "apply_odd_zernikes",
     "beam_tilt_to_zernike_coeffs",

@@ -11,7 +11,11 @@ from torch_ctf._ctf_preparation import (
     infer_device,
     prepare_frequency_grid_2d,
 )
-from torch_ctf.ctf_aberrations import apply_even_zernikes, apply_odd_zernikes
+from torch_ctf.ctf_aberrations import (
+    apply_astigmatism_to_defocus,
+    apply_even_zernikes,
+    apply_odd_zernikes,
+)
 from torch_ctf.ctf_utils import calculate_total_phase_shift
 
 PhaseShiftProvider = Callable[[torch.Tensor, torch.Tensor], torch.Tensor]
@@ -163,41 +167,6 @@ def _build_freq_grid(
     return fft_freq_grid, fft_freq_grid_squared, rho, theta
 
 
-def _apply_astigmatism_to_defocus(
-    defocus: torch.Tensor,
-    astigmatism: torch.Tensor,
-    astigmatism_angle: torch.Tensor,
-    fft_freq_grid: torch.Tensor,
-    fft_freq_grid_squared: torch.Tensor,
-) -> torch.Tensor:
-    """Apply astigmatism parameterization to produce per-frequency defocus."""
-    sin_theta = torch.sin(torch.deg2rad(astigmatism_angle))
-    cos_theta = torch.cos(torch.deg2rad(astigmatism_angle))
-    unit_astigmatism_vector_yx = einops.rearrange(
-        [sin_theta, cos_theta], "yx ... -> ... yx"
-    )
-    astigmatism = einops.rearrange(astigmatism, "... -> ... 1")
-
-    # Calculate the unit vectors from the frequency grids
-    astigmatism_vector = torch.sqrt(astigmatism) * unit_astigmatism_vector_yx
-    fft_freq_grid_norm = torch.sqrt(
-        einops.rearrange(fft_freq_grid_squared, "... -> ... 1")
-        + torch.finfo(torch.float32).eps
-    )
-    direction_unitvector = fft_freq_grid / fft_freq_grid_norm
-
-    # Subtract the astigmatism from the defocus. And add the squared dot product between
-    # the direction unit-vector and the astigamatism vector (per-frequency adjustment).
-    astigmatism_adjustment = einops.einsum(
-        direction_unitvector,
-        astigmatism_vector,
-        "... h w f, ... f -> ... h w",
-    )
-    astigmatism_adjustment = (astigmatism_adjustment**2) * 2
-    defocus = defocus - einops.rearrange(astigmatism, "... -> ... 1")
-    return defocus + astigmatism_adjustment
-
-
 def _setup_ctf_context_2d(
     defocus: float | torch.Tensor,
     astigmatism: float | torch.Tensor,
@@ -252,7 +221,7 @@ def _setup_ctf_context_2d(
         device=device,
         transform_matrix=transform_matrix,
     )
-    defocus = _apply_astigmatism_to_defocus(
+    defocus = apply_astigmatism_to_defocus(
         defocus=defocus,
         astigmatism=astigmatism,
         astigmatism_angle=astigmatism_angle,

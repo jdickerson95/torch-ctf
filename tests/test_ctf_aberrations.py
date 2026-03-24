@@ -4,6 +4,7 @@ import pytest
 import torch
 
 from torch_ctf import (
+    apply_astigmatism_to_defocus,
     apply_even_zernikes,
     apply_odd_zernikes,
     beam_tilt_to_zernike_coeffs,
@@ -30,6 +31,32 @@ def test_beam_tilt_to_zernike_coeffs():
     assert result["Z31s"].shape == (1,)
     assert torch.all(torch.isfinite(result["Z31c"]))
     assert torch.all(torch.isfinite(result["Z31s"]))
+
+
+def test_apply_astigmatism_to_defocus_direct():
+    """Test public astigmatism defocus adjustment helper directly."""
+    h, w = 6, 6
+    fft_freq_grid = torch.zeros((h, w, 2), dtype=torch.float32)
+    fft_freq_grid[..., 0] = torch.linspace(-0.2, 0.2, steps=w)
+    fft_freq_grid[..., 1] = torch.linspace(-0.2, 0.2, steps=h).unsqueeze(-1)
+    fft_freq_grid_squared = torch.sum(fft_freq_grid**2, dim=-1)
+
+    defocus = torch.tensor([2.0, 3.0], dtype=torch.float32).view(2, 1, 1)
+    astigmatism = torch.tensor([0.0, 0.4], dtype=torch.float32)
+    astigmatism_angle = torch.tensor([0.0, 45.0], dtype=torch.float32)
+
+    adjusted = apply_astigmatism_to_defocus(
+        defocus=defocus,
+        astigmatism=astigmatism,
+        astigmatism_angle=astigmatism_angle,
+        fft_freq_grid=fft_freq_grid,
+        fft_freq_grid_squared=fft_freq_grid_squared,
+    )
+
+    assert adjusted.shape == (2, h, w)
+    assert torch.all(torch.isfinite(adjusted))
+    assert torch.allclose(adjusted[0], torch.full((h, w), 2.0), atol=1e-6)
+    assert not torch.allclose(adjusted[1], torch.full((h, w), 3.0), atol=1e-6)
 
 
 def test_resolve_odd_zernikes_beam_tilt_only():
