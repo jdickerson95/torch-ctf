@@ -4,7 +4,6 @@ import pytest
 import torch
 
 from torch_ctf import calculate_total_phase_shift
-
 from torch_ctf.ctf_thickness import (
     _ctf_from_thickness,
     calculate_ctf_thickness_1d,
@@ -87,7 +86,7 @@ def test_ctf_thickness_router_matches_explicit_1d():
 
 
 def test_ctf_thickness_2d_amplitude_small_t_matches_sin_chi():
-    from torch_ctf.ctf_2d import _setup_ctf_2d
+    from torch_ctf._ctf_core import _setup_ctf_context_2d
 
     t_small = 1e-25
     (
@@ -96,10 +95,11 @@ def test_ctf_thickness_2d_amplitude_small_t_matches_sin_chi():
         sph,
         amp,
         phase,
+        _,  # fft_freq_grid not used here
         g2,
         _rho,
         _theta,
-    ) = _setup_ctf_2d(
+    ) = _setup_ctf_context_2d(
         defocus=1.5,
         astigmatism=0.0,
         astigmatism_angle=0.0,

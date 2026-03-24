@@ -84,10 +84,11 @@ def calculate_ctf_2d(
         spherical_aberration,
         amplitude_contrast,
         phase_shift,
+        _,  # fft_freq_grid not used here
         fft_freq_grid_squared,
         rho,
         theta,
-    ) = _setup_ctf_2d(
+    ) = _setup_ctf_context_2d(
         defocus=defocus,
         astigmatism=astigmatism,
         astigmatism_angle=astigmatism_angle,
@@ -131,112 +132,4 @@ def calculate_ctf_2d(
         antisymmetric_phase_shift=antisymmetric_phase_shift,
         return_complex_ctf=return_complex_ctf,
         include_antisymmetric_phase=include_antisymmetric_phase,
-    )
-
-
-def _setup_ctf_2d(
-    defocus: float | torch.Tensor,
-    astigmatism: float | torch.Tensor,
-    astigmatism_angle: float | torch.Tensor,
-    voltage: float | torch.Tensor,
-    spherical_aberration: float | torch.Tensor,
-    amplitude_contrast: float | torch.Tensor,
-    phase_shift: float | torch.Tensor,
-    pixel_size: float | torch.Tensor,
-    image_shape: tuple[int, int],
-    rfft: bool,
-    fftshift: bool,
-    transform_matrix: torch.Tensor | None = None,
-) -> tuple[
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-    torch.Tensor,
-]:
-    """Setup parameters for 2D CTF calculation.
-
-    Parameters
-    ----------
-    defocus : float | torch.Tensor
-        Defocus in micrometers, positive is underfocused.
-        `(defocus_u + defocus_v) / 2`
-    astigmatism : float | torch.Tensor
-        Amount of astigmatism in micrometers.
-        `(defocus_u - defocus_v) / 2`
-    astigmatism_angle : float | torch.Tensor
-        Angle of astigmatism in degrees. 0 places `defocus_u` along the y-axis.
-    voltage : float | torch.Tensor
-        Acceleration voltage in kilovolts (kV).
-    spherical_aberration : float | torch.Tensor
-        Spherical aberration in millimeters (mm).
-    amplitude_contrast : float | torch.Tensor
-        Fraction of amplitude contrast (value in range [0, 1]).
-    phase_shift : float | torch.Tensor
-        Angle of phase shift applied to CTF in degrees.
-    pixel_size : float | torch.Tensor
-        Pixel size in Angströms per pixel (Å px⁻¹).
-    image_shape : tuple[int, int]
-        Shape of 2D images onto which CTF will be applied.
-    rfft : bool
-        Generate the CTF containing only the non-redundant half transform from a rfft.
-    fftshift : bool
-        Whether to apply fftshift on the resulting CTF images.
-    transform_matrix : torch.Tensor | None
-        Optional 2x2 transformation matrix for anisotropic magnification.
-        This should be the real-space transformation matrix A. The frequency-space
-        transformation (A^-1)^T is automatically computed and applied.
-
-    Returns
-    -------
-    defocus : torch.Tensor
-        Defocus with astigmatism adjustments applied.
-    voltage : torch.Tensor
-        Acceleration voltage tensor.
-    spherical_aberration : torch.Tensor
-        Spherical aberration tensor.
-    amplitude_contrast : torch.Tensor
-        Amplitude contrast tensor.
-    phase_shift : torch.Tensor
-        Phase shift tensor.
-    fft_freq_grid_squared : torch.Tensor
-        Squared frequency grid in Angstroms^-2.
-    """
-    (
-        defocus,
-        voltage,
-        spherical_aberration,
-        amplitude_contrast,
-        phase_shift,
-        _,
-        fft_freq_grid_squared,
-        rho,
-        theta,
-    ) = _setup_ctf_context_2d(
-        defocus=defocus,
-        astigmatism=astigmatism,
-        astigmatism_angle=astigmatism_angle,
-        voltage=voltage,
-        spherical_aberration=spherical_aberration,
-        amplitude_contrast=amplitude_contrast,
-        phase_shift=phase_shift,
-        pixel_size=pixel_size,
-        image_shape=image_shape,
-        rfft=rfft,
-        fftshift=fftshift,
-        transform_matrix=transform_matrix,
-    )
-
-    return (
-        defocus,
-        voltage,
-        spherical_aberration,
-        amplitude_contrast,
-        phase_shift,
-        fft_freq_grid_squared,
-        rho,
-        theta,
     )

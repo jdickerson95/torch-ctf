@@ -668,7 +668,7 @@ def test_calculate_ctf_2d_return_complex_ctf_rfft_shape_and_unit_modulus():
 
 def test_calculate_ctf_2d_return_complex_ctf_beam_tilt_matches_manual_phase():
     """return_complex_ctf includes antisymmetric phase in e^(-i*(chi_s+chi_a))."""
-    from torch_ctf.ctf_2d import _setup_ctf_2d
+    from torch_ctf._ctf_core import _setup_ctf_context_2d
 
     kwargs = {
         "defocus": 1.5,
@@ -692,10 +692,11 @@ def test_calculate_ctf_2d_return_complex_ctf_beam_tilt_matches_manual_phase():
         spherical_aberration,
         amplitude_contrast,
         phase_shift,
+        _,  # fft_freq_grid not used here
         fft_freq_grid_squared,
         rho,
         theta,
-    ) = _setup_ctf_2d(
+    ) = _setup_ctf_context_2d(
         defocus=kwargs["defocus"],
         astigmatism=kwargs["astigmatism"],
         astigmatism_angle=kwargs["astigmatism_angle"],
