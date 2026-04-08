@@ -115,6 +115,7 @@ def make_laser_coords(
     laser_trans_offset_angstrom: float,
     beam_waist_angstroms: float,
     rayleigh_range_angstroms: float,
+    z_offset_angstrom: float = 0.0,
 ) -> torch.Tensor:
     """Make the laser coordinates for the CTF.
 
@@ -136,15 +137,24 @@ def make_laser_coords(
         Beam waist (w0) in Angstroms.
     rayleigh_range_angstroms : float
         Rayleigh range (zR) in Angstroms.
+    z_offset_angstrom : float, optional
+        Displacement of the laser focus from the BFP along the electron beam axis
+        in Angstroms. At z_offset ≠ 0 each frequency component samples the laser
+        at a position scaled by (f_lens + z_offset) rather than f_lens alone.
+        Default is 0.0.
 
     Returns
     -------
     laser_coords : torch.Tensor
         Dimensionless laser coordinates, shape (..., H, W, 2) with last dim [Lx, Ly].
     """
-    # Convert frequency coordinates to physical coordinates [A]
+    # Convert frequency coordinates to physical coordinates [A].
+    # When the laser is displaced from the BFP by z_offset along the electron axis,
+    # each frequency component f arrives at position λ*(f_lens + z_offset)*f in the
+    # laser plane rather than λ*f_lens*f, giving an effective focal length.
+    effective_focal_length = focal_length_angstrom + z_offset_angstrom
     physical_freq_coords = (
-        fft_freq_grid_angstrom * electron_wavelength_angstrom * focal_length_angstrom
+        fft_freq_grid_angstrom * electron_wavelength_angstrom * effective_focal_length
     )
 
     # Create rotation matrix for xy_angle
@@ -194,6 +204,7 @@ def get_eta(
     pol_angle_deg: float | torch.Tensor,
     xz_angle_deg: float | torch.Tensor,
     laser_phi_deg: float | torch.Tensor,
+    lz_norm_squared: float | torch.Tensor = 0.0,
 ) -> torch.Tensor:
     """Calculate eta (phase modulation) due to laser standing wave.
 
@@ -214,6 +225,11 @@ def get_eta(
         XZ angle in degrees.
     laser_phi_deg : float | torch.Tensor
         Laser phi in degrees.
+    lz_norm_squared : float | torch.Tensor, optional
+        Squared normalised z-offset of the electron beam from the laser axis,
+        (z_offset / beam_waist)². Accounts for the additional transverse distance
+        from the laser axis when the BFP is displaced along the electron beam axis.
+        Default is 0.0.
 
     Returns
     -------
@@ -231,6 +247,7 @@ def get_eta(
     eta0 = torch.as_tensor(eta0, device=device, dtype=dtype)
     beta = torch.as_tensor(beta, device=device, dtype=dtype)
     NA = torch.as_tensor(NA, device=device, dtype=dtype)
+    lz_norm_squared = torch.as_tensor(lz_norm_squared, device=device, dtype=dtype)
     pol_angle_rad = torch.deg2rad(
         torch.as_tensor(pol_angle_deg, device=device, dtype=dtype)
     )
@@ -241,15 +258,18 @@ def get_eta(
         torch.as_tensor(laser_phi_deg, device=device, dtype=dtype)
     )
 
-    # Calculate intermediate terms
+    # Calculate intermediate terms.
+    # eff_transverse_sq combines the in-plane (Ly) and out-of-plane (Lz) transverse
+    # components: the laser beam is cylindrically symmetric, so a displacement along
+    # the electron-beam axis contributes equally to the Gaussian envelope and phase.
     Lx_squared_plus_1 = 1 + Lx**2
-    Ly_squared = Ly**2
+    eff_transverse_sq = Ly**2 + lz_norm_squared
 
     # Main calculation following the original formula
-    # eta0/2 * exp(-2*Ly^2/(1+Lx^2)) / sqrt(1+Lx^2)
+    # eta0/2 * exp(-2*eff_transverse_sq/(1+Lx^2)) / sqrt(1+Lx^2)
     base_term = (
         (eta0 / 2)
-        * torch.exp(-2 * Ly_squared / Lx_squared_plus_1)
+        * torch.exp(-2 * eff_transverse_sq / Lx_squared_plus_1)
         / torch.sqrt(Lx_squared_plus_1)
     )
 
@@ -263,9 +283,9 @@ def get_eta(
     # (1+Lx^2)^(-1/4)
     power_term = Lx_squared_plus_1 ** (-0.25)
 
-    # cos(2*Lx*Ly^2/(1+Lx^2) + 4*Lx/NA^2 - 1.5*arctan(Lx) - laser_phi)
+    # cos(2*Lx*eff_transverse_sq/(1+Lx^2) + 4*Lx/NA^2 - 1.5*arctan(Lx) - laser_phi)
     phase_arg = (
-        2 * Lx * Ly_squared / Lx_squared_plus_1
+        2 * Lx * eff_transverse_sq / Lx_squared_plus_1
         + 4 * Lx / NA**2
         - 1.5 * torch.arctan(Lx)
         - laser_phi_rad
@@ -286,6 +306,7 @@ def get_eta0_from_peak_phase_deg(
     pol_angle_deg: float | torch.Tensor,
     xz_angle_deg: float | torch.Tensor,
     laser_phi_deg: float | torch.Tensor,
+    lz_norm_squared: float | torch.Tensor = 0.0,
 ) -> torch.Tensor:
     """Calculate eta0 from desired peak phase in degrees.
 
@@ -309,6 +330,8 @@ def get_eta0_from_peak_phase_deg(
         XZ angle in degrees.
     laser_phi_deg : float | torch.Tensor
         Laser phi in degrees.
+    lz_norm_squared : float | torch.Tensor, optional
+        Squared normalised z-offset (z_offset / beam_waist)². Default is 0.0.
 
     Returns
     -------
@@ -330,6 +353,7 @@ def get_eta0_from_peak_phase_deg(
         pol_angle_deg=pol_angle_deg,
         xz_angle_deg=xz_angle_deg,
         laser_phi_deg=laser_phi_deg,
+        lz_norm_squared=lz_norm_squared,
     )
 
     # Find the actual peak phase achieved with this eta0
@@ -354,6 +378,7 @@ def calc_LPP_phase(
     laser_polarization_angle_deg: float,
     peak_phase_deg: float,
     voltage: float | torch.Tensor,
+    laser_z_offset_angstrom: float = 0.0,
 ) -> torch.Tensor:
     """Calculate the laser phase plate phase modulation.
 
@@ -381,6 +406,20 @@ def calc_LPP_phase(
         Desired peak phase in degrees.
     voltage : float | torch.Tensor
         Acceleration voltage in kilovolts (kV).
+    laser_z_offset_angstrom : float, optional
+        Displacement of the laser focus from the BFP along the electron beam axis
+        in Angstroms. When non-zero the electron beam interacts with the laser at a
+        plane offset from the BFP, which has two effects:
+
+        1. The (x, y) position of each frequency component in the laser plane is
+           scaled by (f_lens + z_offset) / f_lens (captured via an effective focal
+           length in ``make_laser_coords``).
+        2. Every frequency component is also displaced from the laser beam axis by
+           z_offset in the direction perpendicular to the BFP, contributing an
+           additional transverse term (z_offset / beam_waist)² to the Gaussian
+           envelope and standing-wave phase in ``get_eta``.
+
+        Default is 0.0.
 
     Returns
     -------
@@ -398,7 +437,10 @@ def calc_LPP_phase(
         calculate_relativistic_electron_wavelength(voltage_v) * 1e10
     )  # Convert m to Å
 
-    # Make laser coordinates
+    # Pre-compute the squared normalised z-offset once; passed to get_eta / get_eta0.
+    lz_norm_squared = (laser_z_offset_angstrom / beam_waist_angstroms) ** 2
+
+    # Make laser coordinates (effective focal length accounts for effect 1)
     laser_coords = make_laser_coords(
         fft_freq_grid,
         electron_wavelength_angstrom,
@@ -408,6 +450,7 @@ def calc_LPP_phase(
         laser_trans_offset_angstrom,
         beam_waist_angstroms,
         rayleigh_range_angstroms,
+        z_offset_angstrom=laser_z_offset_angstrom,
     )
 
     # Calculate laser phase (antinode configuration)
@@ -420,6 +463,7 @@ def calc_LPP_phase(
         laser_polarization_angle_deg,
         laser_xz_angle_deg,
         laser_phi,
+        lz_norm_squared=lz_norm_squared,
     )
 
     eta = get_eta(
@@ -430,6 +474,7 @@ def calc_LPP_phase(
         laser_polarization_angle_deg,
         laser_xz_angle_deg,
         laser_phi,
+        lz_norm_squared=lz_norm_squared,
     )
 
     return eta
@@ -448,6 +493,7 @@ def _lpp_phase_shift_degrees_from_grid(
     laser_polarization_angle_deg: float,
     peak_phase_deg: float,
     dual_laser: bool,
+    laser_z_offset_angstrom: float = 0.0,
 ) -> torch.Tensor:
     """Build spatially varying LPP phase shift in degrees from a frequency grid."""
     if dual_laser:
@@ -463,6 +509,7 @@ def _lpp_phase_shift_degrees_from_grid(
             laser_polarization_angle_deg=laser_polarization_angle_deg,
             peak_phase_deg=peak_phase_deg,
             voltage=voltage,
+            laser_z_offset_angstrom=laser_z_offset_angstrom,
         )
         phase2 = calc_LPP_phase(
             fft_freq_grid=fft_freq_grid,
@@ -476,6 +523,7 @@ def _lpp_phase_shift_degrees_from_grid(
             laser_polarization_angle_deg=laser_polarization_angle_deg,
             peak_phase_deg=peak_phase_deg,
             voltage=voltage,
+            laser_z_offset_angstrom=laser_z_offset_angstrom,
         )
         laser_phase_radians = phase1 + phase2
     else:
@@ -491,6 +539,7 @@ def _lpp_phase_shift_degrees_from_grid(
             laser_polarization_angle_deg=laser_polarization_angle_deg,
             peak_phase_deg=peak_phase_deg,
             voltage=voltage,
+            laser_z_offset_angstrom=laser_z_offset_angstrom,
         )
 
     return torch.rad2deg(laser_phase_radians)
@@ -507,6 +556,7 @@ def _make_lpp_phase_shift_provider(
     laser_polarization_angle_deg: float,
     peak_phase_deg: float,
     dual_laser: bool,
+    laser_z_offset_angstrom: float = 0.0,
 ) -> PhaseShiftProvider:
     """Build a named phase-shift provider for LPP-enabled CTF calculations."""
 
@@ -527,6 +577,7 @@ def _make_lpp_phase_shift_provider(
             laser_polarization_angle_deg=laser_polarization_angle_deg,
             peak_phase_deg=peak_phase_deg,
             dual_laser=dual_laser,
+            laser_z_offset_angstrom=laser_z_offset_angstrom,
         )
 
     return phase_shift_provider
@@ -554,6 +605,7 @@ def calc_LPP_ctf_2D(
     laser_polarization_angle_deg: float,
     peak_phase_deg: float,
     dual_laser: bool = False,
+    laser_z_offset_angstrom: float = 0.0,
     beam_tilt_mrad: torch.Tensor | None = None,
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
@@ -613,6 +665,11 @@ def calc_LPP_ctf_2D(
         If True, add a second laser with the same parameters but rotated 90° in the
         xy plane (perpendicular to the first). The two phase contributions are summed.
         Default is False.
+    laser_z_offset_angstrom : float, optional
+        Displacement of the laser focus from the BFP along the electron beam axis
+        in Angstroms. When non-zero the electron beam interacts with the laser at a
+        plane offset from the BFP. See ``calc_LPP_phase`` for a full description of
+        the two physical effects this encodes. Default is 0.0.
     beam_tilt_mrad : torch.Tensor | None
         Beam tilt in milliradians. [bx, by] in mrad
     even_zernike_coeffs : dict | None
@@ -670,6 +727,7 @@ def calc_LPP_ctf_2D(
         laser_polarization_angle_deg=laser_polarization_angle_deg,
         peak_phase_deg=peak_phase_deg,
         dual_laser=dual_laser,
+        laser_z_offset_angstrom=laser_z_offset_angstrom,
     )
 
     total_phase_shift = _phase_symmetric(
