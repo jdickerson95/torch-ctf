@@ -139,8 +139,10 @@ def make_laser_coords(
         Rayleigh range (zR) in Angstroms.
     z_offset_angstrom : float, optional
         Displacement of the laser focus from the BFP along the electron beam axis
-        in Angstroms. At z_offset ≠ 0 each frequency component samples the laser
-        at a position scaled by (f_lens + z_offset) rather than f_lens alone.
+        in Angstroms. Positive values place the laser *downstream* of the BFP
+        (electron beam diverging); negative values place it *upstream* (converging).
+        At z_offset ≠ 0 each frequency component samples the laser at a position
+        scaled by (f_lens + z_offset) rather than f_lens alone.
         Default is 0.0.
 
     Returns
@@ -229,6 +231,7 @@ def get_eta(
         Squared normalised z-offset of the electron beam from the laser axis,
         (z_offset / beam_waist)². Accounts for the additional transverse distance
         from the laser axis when the BFP is displaced along the electron beam axis.
+        Always non-negative (the sign of z_offset does not matter here).
         Default is 0.0.
 
     Returns
@@ -408,8 +411,10 @@ def calc_LPP_phase(
         Acceleration voltage in kilovolts (kV).
     laser_z_offset_angstrom : float, optional
         Displacement of the laser focus from the BFP along the electron beam axis
-        in Angstroms. When non-zero the electron beam interacts with the laser at a
-        plane offset from the BFP, which has two effects:
+        in Angstroms. Positive means the laser is *downstream* of the BFP (beam
+        diverging); negative means *upstream* (beam converging). When non-zero the
+        electron beam interacts with the laser at a plane offset from the BFP,
+        which has two effects:
 
         1. The (x, y) position of each frequency component in the laser plane is
            scaled by (f_lens + z_offset) / f_lens (captured via an effective focal
@@ -417,7 +422,8 @@ def calc_LPP_phase(
         2. Every frequency component is also displaced from the laser beam axis by
            z_offset in the direction perpendicular to the BFP, contributing an
            additional transverse term (z_offset / beam_waist)² to the Gaussian
-           envelope and standing-wave phase in ``get_eta``.
+           envelope and standing-wave phase in ``get_eta``. The sign of z_offset
+           does not affect this term (it is always an attenuation).
 
         Default is 0.0.
 
@@ -494,6 +500,7 @@ def _lpp_phase_shift_degrees_from_grid(
     peak_phase_deg: float,
     dual_laser: bool,
     laser_z_offset_angstrom: float = 0.0,
+    laser_z_offset_2_angstrom: float = 0.0,
 ) -> torch.Tensor:
     """Build spatially varying LPP phase shift in degrees from a frequency grid."""
     if dual_laser:
@@ -523,7 +530,7 @@ def _lpp_phase_shift_degrees_from_grid(
             laser_polarization_angle_deg=laser_polarization_angle_deg,
             peak_phase_deg=peak_phase_deg,
             voltage=voltage,
-            laser_z_offset_angstrom=laser_z_offset_angstrom,
+            laser_z_offset_angstrom=laser_z_offset_2_angstrom,
         )
         laser_phase_radians = phase1 + phase2
     else:
@@ -557,6 +564,7 @@ def _make_lpp_phase_shift_provider(
     peak_phase_deg: float,
     dual_laser: bool,
     laser_z_offset_angstrom: float = 0.0,
+    laser_z_offset_2_angstrom: float = 0.0,
 ) -> PhaseShiftProvider:
     """Build a named phase-shift provider for LPP-enabled CTF calculations."""
 
@@ -578,6 +586,7 @@ def _make_lpp_phase_shift_provider(
             peak_phase_deg=peak_phase_deg,
             dual_laser=dual_laser,
             laser_z_offset_angstrom=laser_z_offset_angstrom,
+            laser_z_offset_2_angstrom=laser_z_offset_2_angstrom,
         )
 
     return phase_shift_provider
@@ -606,6 +615,7 @@ def calc_LPP_ctf_2D(
     peak_phase_deg: float,
     dual_laser: bool = False,
     laser_z_offset_angstrom: float = 0.0,
+    laser_z_offset_2_angstrom: float = 0.0,
     beam_tilt_mrad: torch.Tensor | None = None,
     even_zernike_coeffs: dict | None = None,
     odd_zernike_coeffs: dict | None = None,
@@ -666,10 +676,15 @@ def calc_LPP_ctf_2D(
         xy plane (perpendicular to the first). The two phase contributions are summed.
         Default is False.
     laser_z_offset_angstrom : float, optional
-        Displacement of the laser focus from the BFP along the electron beam axis
-        in Angstroms. When non-zero the electron beam interacts with the laser at a
-        plane offset from the BFP. See ``calc_LPP_phase`` for a full description of
-        the two physical effects this encodes. Default is 0.0.
+        Displacement of the first laser cavity focus from the BFP along the electron
+        beam axis in Angstroms. Positive is downstream, negative is upstream.
+        See ``calc_LPP_phase`` for a full description of the two physical effects.
+        Default is 0.0.
+    laser_z_offset_2_angstrom : float, optional
+        Displacement of the second laser cavity focus from the BFP along the electron
+        beam axis in Angstroms (only used when ``dual_laser=True``). Allows the two
+        perpendicular cavities to be at different heights. Defaults to 0.0, which
+        gives the same z-offset as the first cavity (i.e. no difference between them).
     beam_tilt_mrad : torch.Tensor | None
         Beam tilt in milliradians. [bx, by] in mrad
     even_zernike_coeffs : dict | None
@@ -728,6 +743,7 @@ def calc_LPP_ctf_2D(
         peak_phase_deg=peak_phase_deg,
         dual_laser=dual_laser,
         laser_z_offset_angstrom=laser_z_offset_angstrom,
+        laser_z_offset_2_angstrom=laser_z_offset_2_angstrom,
     )
 
     total_phase_shift = _phase_symmetric(
